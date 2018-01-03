@@ -90,7 +90,7 @@ $collect_usage_info=1;
 # show various usage info at end of plugin output
 # also available by using the --ishowusage command line parameter
 # requires additional perl modules if invoked
-$show_usage_info=1;
+$show_usage_info=0;
 
 # Pro Only:
 # Generate a Nagios error if there is a problem updating the usage stats

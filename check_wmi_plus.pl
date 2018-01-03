@@ -43,10 +43,10 @@ use lib "/usr/lib64/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.60;
+our $VERSION=1.61;
 
 # which version of PRO (if used does this require)
-our $requires_PRO_VERSION=1.26;
+our $requires_PRO_VERSION=1.27;
 
 use strict;
 use Getopt::Long;
@@ -65,11 +65,13 @@ our $opt_mode='';
 our $opt_submode='';
 our $opt_username='';
 our $opt_password='';
+our $opt_show_fields='';
 our $opt_wminamespace='root/cimv2'; # this is the default namespace
 our $opt_warn=(); # this becomes an array reference
 our $opt_critical=(); # this becomes an array reference
 our @opt_include_data=(); # this becomes an array reference
 our @opt_exclude_data=(); # this becomes an array reference
+our @opt_map_exit_status=();
 our $debug=0; # default value
 our $opt_value='';
 our $opt_z='';
@@ -109,7 +111,7 @@ our %the_arguments = (
    _arg2  => '',
    _arg3  => '',
    _arg4  => undef, # we need this undef for checkeventlog so we know if something was specified or not - take care with other checks that use this
-   _arg5  => '',
+   _arg5  => undef,
    _bytefactor  => '',
    _delay       => '',
    _host        => '',
@@ -145,12 +147,28 @@ my %good_module_versions=(
 my %displaywhatwhen_mode_list=();
 
 # define some "string" constants
-my %string_constant=(
+our %string_constant=(
    ok       => 0,
    warning  => 1,
    critical => 2,
    unknown  => 3,
+
+   CRITERIA => 1,
+   EVENT    => 2,
+
 );
+
+# for mode=checkeventlog
+our %event_modes=(
+   ANY         => 1,
+   INCLUDEALL  => 2,
+);
+
+our %event_counts=(
+   CRITERIA => 1,
+   EVENT    => 2,
+);
+  
 
 
 #==============================================================================
@@ -302,14 +320,22 @@ my %mode_list = (
    checkfilesize        => 1,
    checkfoldersize      => 1,
    checkgeneric         => 1,
+   checkgroup           => 1,
+   checkgroupuser       => 1,
+   checklogon           => 1,
    checkmem             => 1,
    checknetwork         => 1,
    checkpage            => 1,
+   checkprintjob        => 1,
    checkprocess         => 1,
+   checkquota           => 1,
    checkservice         => 1,
+   checkshare           => 1,
    checksmart           => 1,
+   checkstartupcommand  => 1,
    checktime            => 1,
    checkuptime          => 1,
+   checkuseraccount     => 1,
    checkvolsize         => 1,
    checkwsusserver      => 0,
 );
@@ -359,34 +385,42 @@ our %valid_test_fields = (
    # you should always specify at least one per mode that uses warning/critical checking so that it knows what to check against
    checkcpu          => [ qw(_AvgCPU) ],
    checkcpuq         => [ qw(_AvgCPUQLen) ],
-   checkdrivesize    => [ qw(_Used% _UsedGB _Free% _FreeGB) ],
+   checkdrivesize    => [ qw(_Used% _UsedSpace _UsedGB _Free% FreeSpace_FreeGB) ],
    checkeventlog     => [ qw(_ItemCount) ],
    checkfileage      => [ qw(_FileAge) ],
    checkfilesize     => [ qw(FileSize _ItemCount) ],
    checkfoldersize   => [ qw(_FolderSize _ItemCount) ],
    checkgeneric      => [ qw(FileControlBytesPersec FileControlOperationsPersec FileDataOperationsPersec FileReadBytesPersec FileReadOperationsPersec FileWriteBytesPersec FileWriteOperationsPersec) ],
+   checkgroup        => [ qw(_ItemCount _ItemChange LocalAccount Status) ],
+   checkgroupuser    => [ qw(_ItemCount _ItemChange) ],
+   checklogon        => [ qw(_ItemCount _ItemChange) ],
    checkmem          => [ qw(_MemUsed% _MemFree% _MemUsed _MemFree _MemTotal) ],
    checknetwork      => [ qw(CurrentBandwidth _PacketsSentPersec _PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors _BytesSentPersec _BytesReceivedPersec _SendBytesUtilisation _ReceiveBytesUtilisation) ],
    checkpage         => [ qw(_Used% _Used _Free _Free% _PeakUsed% _PeakUsed _PeakFree _PeakFree% _Total) ], 
+   checkprintjob     => [ qw(_ItemCount _ItemChange Color Status TotalPages Owner Document DataType) ],
    checkprocess      => [ qw(_ItemCount _NumExcluded) ],
+   checkquota        => [ qw(_ItemCount _ItemChange DiskSpaceUsed Limit Status WarningLimit) ],
    checkservice      => [ qw(_NumBad _NumGood _NumExcluded _Total) ],
+   checkshare        => [ qw(_ItemCount _ItemChange) ],
    checksmart        => [ qw(_DiskFailing _ItemCount Temperature) ],
+   checkstartupcommand=>[ qw(_ItemCount _ItemChange Command Description Name User) ],
    checktime         => [ qw(_DiffSec _CWPSec _WindowsSec) ],
    checkuptime       => [ qw(_UptimeSec) ],
-   checkvolsize      => [ qw(_Used% _UsedGB _Free% _FreeGB) ],
+   checkuseraccount  => [ qw(_ItemCount _ItemChange Disabled LocalAccount Lockout PasswordChangeable PasswordExpires PasswordRequired SIDType Status) ],
+   checkvolsize      => [ qw(_Used% _UsedSpace _UsedGB _Free% FreeSpace_FreeGB) ],
 
 );
 
 # this hash contains lists of the fields that are displayed for specific modes before any per row display starts
 # documentation on format for this is the same as for %display_fields
-my %pre_display_fields = (
+our %pre_display_fields = (
    checknetwork      => [ '_DisplayMsg||~|~| - ||', '_NumInterfaces||Number of Interfaces||~||. Interface Details - ' ],
    checkpage         => [ '_OverallResult||Overall Status - |~|: ||. Individual Page Files Detail' ],
    checksmart        => [ '_DisplayMsg||Overall Status - |~| - ||', '_Total| Disks(s)| Found |~|||', '_NumGood| OK|~|~| and ||', '_NumBad| failing |~|~|~||' ],
    );
 
 # this hash contains lists of the fields that are displayed for specific modes
-my %display_fields = (
+our %display_fields = (
    # key name is the name of the mode
    # value is an array of fields names to display
    # the value can be in 2 formats - 
@@ -406,26 +440,34 @@ my %display_fields = (
    checkcpu          => [ '_DisplayMsg||~|~| - ||', '_AvgCPU|%|Average CPU Utilisation| |~||' ],
    checkcpuq         => [ '_DisplayMsg||~|~| - ||', '_AvgCPUQLen||Average CPU Queue Length| | ||', '_arg1| points|~|~|~|(| with', '_delay| sec delay|~| | ||', '_CPUQPoints||~|~|~|gives values: |)' ],
    checkdnsrecords   => [ '_DisplayMsg||~|~| - ||', '_DNSDetails||~|~|~||. ', '_WMIDetails||~|~|~||. ' ],
-   checkdrivesize    => [ '_DisplayMsg||~|~| - ||', 'DiskDisplayName||~|~| ||', '_DriveSizeGB|GB|Total||||', '_UsedGB|GB|Used|| ||', '_Used%|%|~|~||(|)', '_FreeGB|GB|Free|| ||', '_Free%|%|~|~||(|)' ],
+   checkdrivesize    => [ '_DisplayMsg||~|~| - ||', 'DiskDisplayName||~|~| ||', 'Size|#B|Total||||', '_UsedSpace|#B|Used|| ||', '_Used%|%|~|~||(|)', 'FreeSpace|#B|Free|| ||', '_Free%|%|~|~||(|)' ],
    checkeventlog     => [ '_DisplayMsg||~|~| - ||', '_ItemCount| event(s)|~|~| ||', '_SeverityType||~|~||of Severity Level: "|"', '_arg3| hours|~|~|~|were recorded in the last |', '_arg1||~|~|~| from the | Event Log.', "_EventList||~|~|~||" ],
    checkfileage      => [ '_DisplayMsg||~|~| - ||', '_arg1||Age of File| |~|| is ', '_NicelyFormattedFileAge||~|~|~|| or ', '_DisplayFileAge||~|~|~||', '_PerfDataUnit||~|~|||(s).' ], 
    checkfilesize     => [ '_DisplayMsg||~|~| - ||', '_arg1||File| |~|| is ', 'FileSize|#B|~|~|. ||', '_ItemCount| instance(s)|Found| |.||' ], 
    checkfoldersize   => [ '_DisplayMsg||~|~| - ||', '_arg1||Folder| |~|| is ', '_FolderSize|#B|~|~|. ||', '_ItemCount| files(s)|Found| |.||', '_FileList||~|~|~||' ], 
    checkgeneric      => [ '_DisplayMsg||~|~| - ||', 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ], 
+   checkgroup        => [ '_DisplayMsg||~|~| - ||', '_ItemCount| group(s). |Found |~|~||', '_ItemChange||Groups changed since last check=|~|~||', '_ItemList||~|~|~||' ],
+   checkgroupuser    => [ '_DisplayMsg||~|~| - ||', '_ItemCount| group user(s). |Found |~|~||', '_ItemChange||Group users changed since last check=|~|~||', '_ItemList||~|~|~||' ],
+   checklogon        => [ '_DisplayMsg||~|~| - ||', '_ItemCount| logon(s). |Found |~|~||', '_ItemChange||Logons changed since last check=|~|~||', '_ItemList||~|~|~||' ],
    checkmem          => [ '_DisplayMsg||~|~| - ||', 'MemType||~|~|~||: ', '_MemTotal|#B|Total|: | - ||', '_MemUsed|#B|Used|: | ||', '_MemUsed%|%|~|~| - |(|)', '_MemFree|#B|Free|: | ||', '_MemFree%|%|~|~||(|)' ], 
    checknetwork      => [ '_DisplayMsg||~|~| - ||', '_DisplayName||Interface:|~|||', 'IPAddress||IP Address:|~|||', 'MACAddress||MAC Address |~|||', 'CurrentBandwidth|#bit/s|Speed:|~|||', 'DHCPEnabled', '_BytesSentPersec|#B/sec|Byte Send Rate|| (||', '_SendBytesUtilisation|%|Utilisation||), ||', '_BytesReceivedPersec|#B/sec|Byte Receive Rate||(||', '_ReceiveBytesUtilisation|%|Utilisation||) ||', '_PacketsSentPersec|#packet/sec|Packet Send Rate||||', '_PacketsReceivedPersec|#packet/sec|Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
+   checkquota        => [ '_DisplayMsg||~|~| - ||', '_ItemCount| quota(s). |Found |~|~||', '_ItemChange||Quotas changed since last check=|~|~||', '_ItemList||~|~|~||' ],
    checkpage         => [ '_DisplayMsg||~|~| - ||', 'Name||~|~| ||', '_Total|#B|Total|: | - ||', '_Used|#B|Used|: | ||', '_Used%|%|~|~| - |(|)', '_Free|#B|Free|: | ||', '_Free%|%|~|~||(|)', '_PeakUsed|#B|Peak Used|: | ||', '_PeakUsed%|%|~|~| - |(|)', '_PeakFree|#B|Peak Free|: | ||', '_PeakFree%|%|~|~||(|)' ], 
+   checkprintjob     => [ '_DisplayMsg||~|~| - ||', '_ItemCount| print jobs(s). |Found |~|~||', '_ItemChange||Print Job Queue changed since last check=|~|~||', '_ItemList||~|~|~||' ],
    checkprocess      => [ '_DisplayMsg||~|~| - ||', '_ItemCount| Instance(s)|Found |~|~|| of "{_arg1}" running ', '_NumExcluded| excluded|~|~|~|(|). ', 'ProcessList||~|~|~||' ],
    checkservice      => [ '_DisplayMsg||~|~| - ||', '_Total| Services(s)|Found |~|||', '_NumGood| OK|~|~| and ||', '_NumBad| with problems |~|~|~||', '_NumExcluded| excluded|~|~|~|(|). ', '_ServiceList||~|~|~||' ],
+   checkshare        => [ '_DisplayMsg||~|~| - ||', '_ItemCount| shares(s). |Found |~|~||', '_ItemChange||Shares changed since last check=|~|~||', '_ItemList||~|~|~||' ],
    checksmart        => [ '_DisplayMsg||~|~| - ||', '_PhysicalDeviceID||Dev#|~|||', 'Model||~|~|||', 'SerialNumber||Serial#|~|||', 'PredictFailure', 'Temperature' ],
+   checkstartupcommand=>[ '_DisplayMsg||~|~| - ||', '_ItemCount| startup command(s). |Found |~|~||', '_ItemChange||Startup Commands changed since last check=|~|~||', '_ItemList||~|~|~||' ],
    checktime         => [ '_DisplayMsg||~|~| - ||', '_DiffSec| seconds|Time Difference is |~|||', '_WindowsTime||Time from Windows is |~|||(UTC)', '_CWPTime||Check WMI Plus time is |~|||(UTC)' ],
    checkuptime       => [ '_DisplayMsg||~|~| - ||', '_DisplayTime||System Uptime is |~|.||' ],
-   checkvolsize      => [ '_DisplayMsg||~|~| - ||', 'VolumeDisplayName||~|~| ||', '_DriveSizeGB|GB|Total||||', '_UsedGB|GB|Used|| ||', '_Used%|%|~|~||(|)', '_FreeGB|GB|Free|| ||', '_Free%|%|~|~||(|)' ],
+   checkuseraccount  => [ '_DisplayMsg||~|~| - ||', '_ItemCount| user account(s). |Found |~|~||', '_ItemChange||User Accounts changed since last check=|~|~||', '_ItemList||~|~|~||' ],
+   checkvolsize      => [ '_DisplayMsg||~|~| - ||', 'VolumeDisplayName||~|~| ||', 'Capacity|#B|Total||||', '_UsedSpace|#B|Used|| ||', '_Used%|%|~|~||(|)', 'FreeSpace|#B|Free|| ||', '_Free%|%|~|~||(|)' ],
 
 );
 
 # this hash contains lists of the fields that are used as performance data for specific modes
-my %performance_data_fields = (
+our %performance_data_fields = (
    # key name is the name of the mode
    # value is an array of fields names to display
    # the value can be in 2 formats - 
@@ -435,21 +477,29 @@ my %performance_data_fields = (
    # In DISPLAY/UNITS anything enclosed in {} will be substituted by the value of that item of that name eg {DeviceID} will replace by the value contained in DeviceID eg C:
    checkcpu          => [ '_AvgCPU|%|Avg CPU Utilisation' ],
    checkcpuq         => [ '_AvgCPUQLen||Avg CPU Queue Length' ],
-   checkdrivesize    => [ '_UsedGB|GB|{DiskDisplayName} Space', '_Used%|%|{DiskDisplayName} Utilisation' ],
+   checkdrivesize    => [ '_UsedSpace|B|{DiskDisplayName} Space', '_Used%|%|{DiskDisplayName} Utilisation' ],
    checkeventlog     => [ '_ItemCount||Event Count' ],
    checkfileage      => [ '_DisplayFileAge|{_PerfDataUnit}|{_arg1} Age' ],
    checkfilesize     => [ 'FileSize|bytes|{_arg1} Size', '_ItemCount||File Count' ],
    checkfoldersize   => [ '_FolderSize|bytes|{_arg1} Size', '_ItemCount||File Count' ],
    checkgeneric      => [ 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ],
+   checkgroup        => [ '_ItemCount||Group Count' ],
+   checkgroupuser    => [ '_ItemCount||Group User Count' ],
+   checklogon        => [ '_ItemCount||Logon Count' ],
    checkmem          => [ '_MemUsed|Bytes|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ], 
    checknetwork      => [ '_BytesSentPersec||{_DisplayName} BytesSentPersec', '_SendBytesUtilisation|%|{_DisplayName} Send Utilisation', '_BytesReceivedPersec||{_DisplayName} BytesReceivedPersec', '_ReceiveBytesUtilisation|%|{_DisplayName} Receive Utilisation', '_PacketsSentPersec||{_DisplayName} PacketsSentPersec', '_PacketsReceivedPersec||{_DisplayName} PacketsReceivedPersec', 'OutputQueueLength||{_DisplayName} OutputQueueLength', 'PacketsReceivedErrors||{_DisplayName} PacketsReceivedErrors' ],
    checkpage         => [ '_Total|Bytes|{Name} Page File Size', '_Used|Bytes|{Name} Used', '_Used%|%|{Name} Utilisation', '_PeakUsed|Bytes|{Name} Peak Used', '_PeakUsed%|%|{Name} Peak Utilisation' ], 
+   checkprintjob     => [ '_ItemCount||Print Job Count' ],
    checkprocess      => [ '_ItemCount||Process Count', '_NumExcluded||Excluded Process Count' ],
+   checkquota        => [ '_ItemCount||Share Count',  ],
    checkservice      => [ '_Total||Total Service Count', '_NumGood||Service Count OK State', '_NumBad||Service Count Problem State', '_NumExcluded||Excluded Service Count' ],
+   checkshare        => [ '_ItemCount||Share Count' ],
    checksmart        => [ 'Reallocated_Sector_Count||{_DiskDisplayName}_Reallocated_Sector_Count','Power_On_Hours||{_DiskDisplayName}_Power_On_Hours','Power_Cycle_Count||{_DiskDisplayName}_Power_Cycle_Count','Temperature||{_DiskDisplayName}_Temperature','Current_Pending_Sector||{_DiskDisplayName}_Current_Pending_Sector','Offline_Uncorrectable||{_DiskDisplayName}_Offline_Uncorrectable' ],
+   checkstartupcommand=>[ '_ItemCount||Startup Command Count' ],
    checktime         => [ '_DiffSec' ],
    checkuptime       => [ '_UptimeMin|min|Uptime Minutes' ],
-   checkvolsize      => [ '_UsedGB|GB|{VolumeDisplayName} Space', '_Used%|%|{VolumeDisplayName} Utilisation' ],
+   checkuseraccount  => [ '_ItemCount||User Account Count' ],
+   checkvolsize      => [ '_UsedSpace|B|{VolumeDisplayName} Space', '_Used%|%|{VolumeDisplayName} Utilisation' ],
 
 );
 
@@ -458,7 +508,7 @@ my $default_inifile_number_wmi_samples=1;
 my $default_inifile_delay=5;
 
 # some default help text
-my $default_help_text_delay="DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate.";
+our $default_help_text_delay="DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate.";
 
 # name of command example ini file - not named as .ini so that it does not get read as part of reading other ini files
 # assumed to be in the same dir as the other ini files
@@ -478,6 +528,8 @@ our $ini_based_check=0;
 
 our $final_exit_code='';
 
+our $plugin_output='';
+
 # PRO only: this is the file where we control the usage file currently written to 
 our $current_usage_db_suffix_file="$wmi_data_dir/check_wmi_plus.usagedb.suffix";
 
@@ -493,6 +545,9 @@ my $opt_disable_static_variables=0;
 
 # flag to tell us if we have opened the ini files already
 my $ini_files_already_opened=0;
+
+# name of the keep state file
+our $keep_state_file='';
 
 #==============================================================================
 #================================== PARAMETERS ================================
@@ -523,6 +578,7 @@ GetOptions(
    "debug+"                   => \$debug,
    "excludedata=s@"           => \@opt_exclude_data,
    "extrawmicargs=s@"         => \@opt_extra_wmic_args,
+   "fieldshow"                => \$opt_show_fields,
    "forceiniopen"             => \$force_ini_open,
    "forcewmiccommand"         => \$force_wmic_command,
    "forcetruncateoutput=s"    => \$the_arguments{'_truncate_output'},
@@ -556,6 +612,7 @@ GetOptions(
    "logshow"                  => \$opt_log_usage_show,
    "logsuffix=s"              => \$opt_log_usage_suffix,
    "logswitch"                => \$opt_log_usage_switch,
+   "Mapexitstatus=s@"         => \@opt_map_exit_status,
    "mode=s"                   => \$opt_mode,
    "namespace=s"              => \$opt_wminamespace,
    "nodataexit=s"             => \$the_arguments{'_nodataexit'},
@@ -574,6 +631,7 @@ GetOptions(
    "z"                        => \$opt_z,
    "3arg=s"                   => \$the_arguments{'_arg3'},
    "4arg=s"                   => \$the_arguments{'_arg4'},
+   "5arg=s"                   => \$the_arguments{'_arg5'},
    );
 
 if ($test_run) {
@@ -670,6 +728,7 @@ if ($debug || $test_generate) {
       print "Base Dir: $base_dir\n";
       print "Conf File Dir: $conf_file_dir\n";
       print "Loaded Conf File $conf_file\n";
+      print "WMI Ini Dir: $wmi_ini_dir\n";
          
       if ($debug>=2) {
          no warnings;
@@ -711,10 +770,11 @@ if ($opt_package) {
       cd $base_dir;
       cp $conf_file_dir/check_wmi_plus.conf $conf_file_dir/check_wmi_plus.conf.sample;
       sed -i 's#/opt/nagios/bin/plugins#CHANGE ME TO THE DIRECTORY WHERE THE PLUGIN IS INSTALLED#' $conf_file_dir/check_wmi_plus.conf.sample;
+      # make the compiled ini file zero so that it forces a recompile
       rm $wmi_data_dir/check_wmi_plus.compiledini;
       touch $wmi_data_dir/check_wmi_plus.compiledini;
       chown -R nagios:nagios $conf_file_dir $base_dir;
-      tar czvf $tarfile --no-recursion --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus.README.txt $conf_file_dir/check_wmi_plus.conf.sample $wmi_ini_dir/* $wmi_data_dir $wmi_data_dir/check_wmi_plus.compiledini event_generic.pl check_wmi_plus.makeman.sh
+      tar czvf $tarfile --no-recursion --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus_help.pl check_wmi_plus.README.txt $conf_file_dir/check_wmi_plus.conf.sample $wmi_ini_dir/* $wmi_data_dir $wmi_data_dir/check_wmi_plus.compiledini event_generic.pl check_wmi_plus.makeman.sh
       ";
    $output=`$cmd 2>&1`;
    print "CMD:$cmd\n\nOUTPUT:$output\n\n";
@@ -733,7 +793,7 @@ if ($wmi_ini_file && ! -f $wmi_ini_file) {
    print "This plugin requires an INI file. Configure its location by setting the \$wmi_ini_file variable in '$conf_file' or by using the --inifile parameter to override the default setting. Ini File currently set to '$wmi_ini_file'";
    finish_program($ERRORS{'UNKNOWN'});
 } elsif ($wmi_ini_dir && ! -d $wmi_ini_dir) {
-   print "This plugin requires an INI directory. Configure its location by setting the \$wmi_ini_dir variable in '$conf_file' or by using the --inidir parameter to override the default setting. Ini Directory currently set to '$wmi_ini_dir'";
+   print "This plugin requires an INI directory. Configure its location by setting the \$wmi_ini_dir variable in '$conf_file' or by using the --inidir parameter to override the default setting. Ini Directory currently set to '$wmi_ini_dir'. ";
    finish_program($ERRORS{'UNKNOWN'});
 }
 
@@ -744,7 +804,7 @@ if ($the_arguments{'_timeout'}) {
 if (!$opt_help && !$opt_texthelp && !$opt_inihelp) {
    # Setup the trap for a timeout only if not showing the help info
    $SIG{'ALRM'} = sub {
-      print "UNKNOWN - Plugin Timed out ($TIMEOUT sec). There are multiple possible reasons for this, some of them include - The host $the_arguments{_host} might just be really busy, it might not even be running Windows.\n";
+      $plugin_output.="UNKNOWN - Plugin Timed out ($TIMEOUT sec). There are multiple possible reasons for this, some of them include - The host $the_arguments{_host} might just be really busy, it might not even be running Windows.\n";
       finish_program($ERRORS{'UNKNOWN'});
    };
    alarm($TIMEOUT);
@@ -753,6 +813,7 @@ if (!$opt_help && !$opt_texthelp && !$opt_inihelp) {
 if ($the_arguments{'_bytefactor'}) {
    if ($the_arguments{'_bytefactor'} ne '1024' && $the_arguments{'_bytefactor'} ne '1000') {
       print "The BYTEFACTOR option must be 1024 or 1000. '$the_arguments{'_bytefactor'}' is not valid.\n";
+      include_help();
       short_usage();
    }
 }
@@ -764,6 +825,7 @@ $the_arguments{'_savedbytefactor'}=$the_arguments{'_bytefactor'} || '';
 $the_arguments{'_bytefactor'}=$actual_bytefactor;
 
 if ($opt_help || $opt_texthelp) {
+   include_help();
    usage();
 }
 
@@ -789,6 +851,7 @@ if (! $the_arguments{'_host'} && !$opt_inihelp) {
    # they did not specify a hostname and they are not trying to get inihelp either
    # we need the inihelp bit here so that we drop through to load the inifile and read the inihelp
    print "No Hostname specified\n\n";
+   include_help();
    short_usage();
 }
 
@@ -881,12 +944,14 @@ if (defined($mode_list{$opt_mode})) {
          show_ini_help_overview();
       } else {
          print "A valid MODE and/or SUBMODE must be specified\n";
+         include_help();
          short_usage();
       }
 
    }
 
    print "A valid MODE and/or SUBMODE must be specified\n";
+   include_help();
    short_usage();
 }
 
@@ -897,6 +962,17 @@ finish_program($ERRORS{'OK'});
 #================================== FUNCTIONS =================================
 #==============================================================================
 
+#-------------------------------------------------------------------------
+sub include_help {
+if (-f "$base_dir/check_wmi_plus_help.pl") {
+   if (do "$base_dir/check_wmi_plus_help.pl") {
+      $debug && print "Help Library is present\n";
+   } else {
+      print "Help Library exists but does not compile: $@\n";
+      exit 1;
+   }
+}
+}
 #-------------------------------------------------------------------------
 sub check_module_versions {
 my ($force_show)=@_;
@@ -1226,566 +1302,6 @@ foreach my $ini_mode (sort @ini_modes) {
 finish_program($ERRORS{'UNKNOWN'});
 }
 #-------------------------------------------------------------------------
-sub short_usage {
-my ($no_exit)=@_;
-print <<EOT;
-Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN]
-EOT
-if (!$no_exit) {
-   print "Help as a Manpage: --help\nHelp as Text: --itexthelp\n";
-   finish_program($ERRORS{'UNKNOWN'});
-}
-}
-#-------------------------------------------------------------------------
-sub usage {
-
-if ($opt_help) {  
-   if (-x $make_manpage_script) {
-      # we have the script to make the manpage and have not been asked to show text only help
-      exec ("$make_manpage_script \"$0 --itexthelp\" \"$manpage_dir\"") or print STDERR "couldn't exec $make_manpage_script: $!";
-   } else {
-      print "Warning: Can not access/execute Manpage script ($make_manpage_script).\nShowing help in text-only format.\n\n";
-   }
-}
-
-my $multiplier_list=join(', ',keys %multipliers);
-my $time_multiplier_list=join(', ',keys %time_multipliers);
-
-# there is probably a better way to do this
-# I want to list out all the keys in the hash %mode_list where the value = 0
-my $modelist='';
-for my $mode (sort keys %mode_list) {
-   if (!$mode_list{$mode}) {
-      $modelist.="$mode, "
-   }
-}
-$modelist=~s/, $/./;
-
-# list out the valid fields for each mode for warn/crit specifications
-my %field_lists;
-foreach my $mode (keys %valid_test_fields) {
-   $field_lists{$mode}=join(', ',@{$valid_test_fields{$mode}});
-   $field_lists{$mode}=~s/, $/./; # remove the last comma space
-   # I can't work out one nice regex to do this next bit, so its 2
-   # One for when there is only 1 field defined and
-   # One for when there is more than 1 field defined
-   # The array @{$valid_test_fields{$mode}} contains the list
-   if ($#{$valid_test_fields{$mode}}>0) {
-      # use the multi field regex
-      $field_lists{$mode}=~s/([\w%]+)(,)*/Valid Warning\/Critical Fields are: $1 (Default)$2/; # stick (default) after the first one in the list
-   } else {
-      # single field only
-      $field_lists{$mode}="The only valid Warning\/Critical Field is $field_lists{$mode}, so you don't even need to specify it!";
-   }
-    
-  
-}
-
-my $ini_info='';
-if ($wmi_ini_file||$wmi_ini_dir) {
-   $ini_info="\nINI FILE SPECIFIED\n There is an ini file/dir configured. The ini files contain more checks. --inihelp on its own shows a one line summary of all MODES/SUBMODES contained within the ini files. --inihelp specified with a MODE/SUBMODE shows the help just for that mode. All of the inihelp is also shown at the end of this help text.\n\n";
-}
-
-print <<EOT;
-NAME
- check_wmi_plus.pl - Client-less checking of Windows machines
-BRIEF
- Typical Usage:  
- 
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-w WARN] [-c CRIT]
-
- Complete Usage:  
- 
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN]
- 
- Help as a Manpage:  
- 
- check_wmi_plus.pl --help
- 
- Help as Text:  
- 
- check_wmi_plus.pl --itexthelp (its very long!)
- 
-DESCRIPTION
- check_wmi_plus.pl is a client-less Nagios plugin for checking Windows systems.
- No more need to install any software on any of your Windows machines. Check directly from your Nagios server.
- Check WMI Plus uses the Windows Management Interface (WMI) to check for common services (cpu, disk, sevices, eventlog...) on Windows machines. It requires the open source wmi client for Linux (wmic).
-
- Besides the built in checks, Check WMI Plus functionality can be easily extended through the use of ini files. Check WMI Plus comes with several ini files, but you are free to add your own checks to your own ini file. 
-
- For more information see the website www.edcint.co.nz/checkwmiplus
-
-REQUIRED OPTIONS
- -H HOSTNAME  specify the name or IP Address of the host that you want to check
- 
-You must specifiy a username/password/domain in one of two ways. The use of -u DOMAIN/USER -p PASSWORD always overrides the values contained in -A AUTHFILE
- -u DOMAIN/USER  specify the DOMAIN (optional) and USER that has permission to execute WMI queries on HOSTNAME
- 
- -p PASSWORD  the PASSWORD for USER
- 
- -A AUTHFILE  the full path to an authentication file. The file is passed directly to $wmic_command. Check WMI PLus does not read the file and hence you must get the file format as required by $wmic_command. You can override the settings in this file by using -u DOMAIN/USER -p PASSWORD.
-
-       Authentication File format is
-         username=USERNAME  
-         password=PASSWORD  
-         domain=DOMAIN  
-
-       Set your own values for USERNAME, PASSWORD and DOMAIN. DOMAIN may be nothing.
-
- -m MODE  the check mode. The list of valid MODEs and a description is shown below
-
-COMMONLY USED OPTIONS
- -s SUBMODE  the submode. Some MODEs have one or more submodes. These are also described below.
- 
- -a ARG1  argument number 1. Its meaning depends on the MODE/SUBMODE combination.
- 
- -o ARG2  argument number 2. Its meaning depends on the MODE/SUBMODE combination.
- 
- -3 ARG3  argument number 3. Its meaning depends on the MODE/SUBMODE combination.
- 
- -4 ARG4  argument number 4. Its meaning depends on the MODE/SUBMODE combination.
- 
- -w WARN  specify warning criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a warning status (unless a critical status is also triggered). See below for how to specify warning criteria.
-
- -c CRIT  specify critical criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a critical status. See below for how to specify warning criteria.
-
-LESS COMMONLY USED OPTIONS
- -b BYTEFACTOR  BYTEFACTOR is either 1000 or 1024 and is used for conversion units eg bytes to GB. Default is 1024.
-
- -t TIMEOUT  specify the number of seconds before the plugin will timeout. Some WMI queries take longer than others and network links with high latency may also require you to increase this from the default value of $TIMEOUT
- 
- --includedata DATASPEC  specify data values that are to be included. See the section below on INCLUDING AND EXCLUDING WMI DATA
-
- --excludedata DATASPEC  specify data values that are to be excluded. See the section below on INCLUDING AND EXCLUDING WMI DATA
-
- --nodatamode  Controls how the plugin responds when no data is returned by the WMI query. Normally, the plugin returns an Unknown error. If you specify this option then you can use WARN/CRIT checking on the _ItemCount field. This is only useful for some checks eg checkfilesize where you might get no data back from the WMI query when the file is not found.
-
- --nodataexit NODATAEXIT  specify the plugin status result if the WMI Query returns no data. Ignored if --nodatamode is set. Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown. Only used for some checks. All checks from the ini file can use this.
- 
- --nodatastring NODATASTRING  specify the string that tha plugin will display if the WMI Query returns no data. Ignored if --nodatamode is set. Only used for some checks where the use of NODATAEXIT is valid. All checks from the ini file can use this.
- 
- -y DELAY  Specify the delay between 2 consecutive WMI queries that are run in a single call to the plugin. Defaults are set for certain checks. Only valid if --nokeepstate used.
-
- --namespace WMINAMESPACE  Specify the WMI Namespace. eg root/MicrosoftDfs. The default is root/cimv2. Use '/' (forward slash) instead of '\\\\' (backslash).
-
- --extrawmicarg EXTRAWMICARG  Specify additional arguments to be passed to the wmic command. The arguments are passed directly and must be complete and understood by wmic. In order to assist with escaping of quotes, all # are translated to ". To pass --option="client ntlmv2 auth"=Yes to wmic specifiy --extrawmicarg "--option=#client ntlmv2 auth#=Yes". This option can be specified multiple times to pass multiple arguments to wmic. If you are using the conf file setting for extra wmic arguments then any options specified here are added to the ones specified in the conf file.
-
- --inihelp  Show the help from the INIFILE for the specified MODE/SUBMODE. If specified without MODE/SUBMODE, this shows a quick short summary of all valid MODE/SUBMODEs in the ini files.
- 
- --inifile=INIFILE  INIFILE is the full path of an ini file to use. The use of --inidir is preferred over this option.
- 
- --inidir=INIDIR  INIDIR is the full path of an ini directory to use. The plugin reads files ending in .ini in INIDIR in the default directory order. The INIFILE is read first, if defined, then each .ini file found in INIDIR. Ini files read later merge with earlier ini files. For any settings that exist in one or more files, the last one read is set.
- 
- --nokeepstate  disables the default mode of keeping state between plugin runs.
- 
- --keepexpiry KEXPIRY  KEXPIRY is the number of seconds after which the plugin assumes that the previously collected data has expired. The default is $opt_keep_state_expiry sec. You should run your plugin more frequently than this value or set KEXPIRY higher.
- 
- --keepid KID  KID is a unique identifier. This is normally not needed. In order to keep state between plugin runs, the data is written to a file. In order to stop collisions between different plugin runs, and hence incorrect calculations,  the filename is unique based on the checkmode, hostname, arguments passed etc. If for some reason these are not sufficient and you are experiencing collisions, you can add a unique KID to each plugin check to ensure uniqueness.
- 
- --joinexpiry JEXPIRY  JEXPIRY is the number of seconds after which the plugin assumes that the previously collected join data has expired. The default is $opt_join_state_expiry sec. Join data that is defined as being reasonably static by whomever created the check will only get refreshed every JEXPIRY seconds.
- 
- -z  Provide full specification warning and critical values for performance data. Not all performance data processing software can handle this eg PNP4Nagios. If this is used with -d then usernames and passwords will be shown rather than being masked (useful if you want to cut and paste the exact wmic command for testing).
- 
- -d  Enable debug. Use this to see a lot more of what is going on including the exact WMI Query and results. User/passwords should be masked in the resulting output unless -z is specified.
- 
- --forcewmiccommand  Force the use of the wmic binary instead of using the WMI Client library. The WMI Client library is used automatically (since it is faster) if it is available on the host running check_wmi_plus. You can tell if you are using the library or the binary wmic by examining the output of -d.
-
- --ishowusage  Pro Version only. Show usage stats in plugin output.
-
- --icollectusage  Pro Version only. Collect usage stats.
-
- --logswitch  Pro Version only. Switch usage DB file.
-
- --logkeep  Pro Version only. do not remove the Usage DB file you are switching to.
-
- --logsuffix SUFFIX  Pro Version only. Switch to the Usage DB file using SUFFIX.
-
- --logshow  Pro Version only. Show current Usage DB file.
- 
- --variablesdisabled  Disable the use of static variables (from the ini files).
- 
- --forceiniopen  Force reading of the ini files. You may want to do this if you are doing a non-ini file check and you are using global variables defined in an ini file. Only use this if you really need it since it makes each invocation of the plugin a lot slower (unless you are doing an ini file check already).
- 
- --forcetruncateoutput LEN  Restrict the length of the plugin output to LEN bytes. The default value is $the_arguments{'_truncate_output'}.
-
-KEEPING STATE
-This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc. Keeping State is used by default.
-
-Checks like this take 2 samples of WMI values (with a DELAY in between) and then calculate a result by differencing the values. By default, the plugin will "keepstate", which means that 1 WMI sample will be collected each time the plugin runs and it will calculate the difference using the values from the previous plugin run. For something like checkcpu, this means that the plugin gives you an average CPU utilisation between runs of the plugin. Even if you are 0% utilisation each time the plugin runs but 100% in between, checkcpu will still report a very high utilisation percentage. This makes for a very accurate plugin result. Another benefit of keeping state is that it results in fewer WMI queries and the plugin runs faster. If you disable keeping state, then, for these types of checks, the plugin reverts to taking 2 WMI samples with a DELAY each time it runs and works out the result then and there. This means that, for example, any CPU activity that happens between plugin runs is never detected.
-
-There are some specific state keeping options: 
---nokeepstate, 
---keepexpiry KEXPIRY, 
---keepid KID, 
-
-The files used to keep state are stored in $tmp_dir. The DELAY setting is not applicable when keeping state is used. If you are "keeping state" then one of the first things shown in the plugin output is the sample period.
-
-$ini_info
-
-INCLUDING AND EXCLUDING WMI DATA
-The --includedata and --excludedata options modify the data returned from the WMI query to include/exclude only data that matches DATASPEC. DATASPEC is in the same format as warning/critical specifications (See Section WARNING AND CRITICAL SPECIFICATION).
-
-At the moment this is only enabled for checks from ini files and it does not apply to the built-in modes. All includes/excludes defined on the command line and the ini file are combined and then processed.
-
-Any fields that are returned by the WMI query can be used, not just the ones that are displayed. You might need to use the debug mode (-d) to see all the valid fields available.
-
-The include/exclude arguments can be specified multiple times on the command line. 
-
-If --includedata is not used, all data is included.
-If any of the inclusions are met the data is included. If any of the exclusions are met then the data is excluded. Inclusions are processed before Exclusions. 
-
-This can be useful to reduce the length of the output for certain checks or to focus on more important data eg on processes using more than 5% of the CPU rather than the potentially hundreds that are using less than 5%.
-
-Examples using -m checkproc -s cpu:
-
---inc IDProcess=\@2000:3000 to include all process IDs that are inside the range of 2000 to 3000.
-
---exc _AvgCPU=\@0:5 to exclude all processes where the average CPU utilisation is inside the range of 0 to 5.
-
-WARNING AND CRITICAL SPECIFICATION
-
-If warning or critical specifications are not provided then no checking is done and the check simply returns the value and any related performance data. If they are specified then they should be formatted as shown below.
-
-Warning and Critical criteria can be specified as a RANGE or as a regular expression (Pro version only).
-
- RANGES
-A RANGE is defined as a start and end point (inclusive) on a numeric scale (possibly negative or positive infinity). The theory is that the plugin will do some sort of check which returns back a numerical value, or metric, which is then compared to the warning and critical thresholds. 
-
-Multiple warning or critical specifications can be specified. This allows for quite complex range checking and/or checking against multiple FIELDS (see below) at one time. The warning/critical is triggered if ANY of the warning/critical specifications are triggered.
-
-If a ini file check returns multiple rows eg checkio logical, criteria are applied to ALL rows and any ONE row meeting the criteria will cause a trigger. If the check has been defined properly it will show which row/instance triggered the criteria as well as the overall result.
-
-This is the generalised format for ranges:
-FIELD=[@]start:end
-
-The convention used for field names in this plugin is as follows:
-   - FIELDs that start with _ eg _Used% are calculated or derived values
-   - FIELDs that are all lower case are command line arguments eg _arg1
-   - Other FIELDs eg PacketsSentPersec are what is returned from the WMI Query
-
- NOTES
-   1. FIELD describes which value the specification is compared against. It is optional (the default is dependent on the MODE).
-   2. start <= end
-   3. start and ":" is not required if start=0
-   4. if range is of format "start:" and end is not specified, assume end is infinity
-   5. to specify negative infinity, use "~"
-   6. alert is raised if metric is outside start and end range (inclusive of endpoints)
-   7. if range starts with "@", then alert if inside this range (inclusive of endpoints)
-   8. The start and end values can use multipliers from the following list: 
-      $multiplier_list or the time-based multipliers $time_multiplier_list.
-      The time-based multipliers are normally used where the data is in seconds.
-      eg 1G for 1 x 10^9 or 2.5k for 2500
-      eg 1wk for 1 week, 3.5day for 3.5 days etc
-
- EXAMPLE RANGES
- This table lists example WARN/CRIT criteria and when they will trigger an alert.
- 10                      < 0 or > 10, (outside the range of {0 .. 10})
- 10:                     < 10, (outside {10 .. infinity})
- ~:10                    > 10, (outside the range of {-infinity .. 10})
- 10:20                   < 10 or > 20, (outside the range of {10 .. 20})
- \@10:20                  = 10 and = 20, (inside the range of {10 .. 20})
- 10                      < 0 or > 10, (outside the range of {0 .. 10})
- 10G                     < 0 or > 10G, (outside the range of {0 .. 10G})
-
- EXAMPLES WITH FIELDS
- for MODE=checkdrivesize:
- _UsedGB=10              Check if the _UsedGB field is < 0 or > 10, (outside the range of {0 .. 10}) 
- 10                      Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}), since _Used% is the default
- _Used%=10               Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}) 
-
- EXAMPLES WITH MULITPLE SPECIFICATIONS
- for MODE=checkdrivesize:
- -w _UsedGB=10 -w 15 -w _Free%=5: -c _UsedGB=20 -c _Used%=25  
- This will generate a warning if 
-    - the Used GB on the drive is more than 10 or 
-    - the used % of the drive is more than 15% or
-    - the free % of the drive is less than 5%
- 
- This will generate a critical if 
-    - the Used GB on the drive is more than 20 or 
-    - the used % of the drive is more than 25%
-
- REGULAR EXPRESSIONS
-This is the generalised format for a regular expression (Pro version only):
-
-FIELD=~REGEX  (for testing if the value of the FIELD matches the REGEX)
-or
-FIELD=!~REGEX  (for testing if the value of the FIELD does not match the REGEX)
-
-Note that as for the definition of RANGES (see section above for more details)
-   - the same naming conventions for FIELD names apply.
-   - specification of the FIELD is optional (in which case the format is ~REGEX or !~REGEX) and the default FIELD is dependent on the MODE.
-
-BUILTIN MODES
- The following modes are coded directly into the plugin itself and do not require any ini files to function.
- 
- Each mode describes the optional arguments and parameters valid for use with that MODE.
- 
- checkcpu  
-   Some CPU checks just take whatever WMI or SNMP gives them from the precalculated values. We don't.
-   We use WMI Raw counters to calculate values over a given timeperiod. This is much more accurate than taking Formatted WMI values.
-   $default_help_text_delay
-   WARN/CRIT  can be used as described below.
-   $field_lists{'checkcpu'}.
-
-checkcpuq  
-   The WMI implementation of CPU Queue length is a point value.
-   We try and improve this slightly by performing several checks and averaging the values.
-   ARG1  (optional) specifies how many point checks are performed. Default 3.
-   DELAY  (optional) specifies the number of seconds between point checks. Default 1. It can be 0 but in reality there will always be some delay between checks as it takes time to perform the actual WMI query 
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checkcpuq'}.
-   
-   Note: Microsoft says "A sustained processor queue of greater than two threads generally indicates
-   processor congestion.". However, we recommended testing your warning/critical levels to determine the
-   optimal value for you.
-   
-checkdrivesize  
-   Also see checkvolsize
-   ARG1  drive letter or volume name of the disk to check. If omitted a list of valid drives will be shown. If set to . all drives will be included.
-      To include multiple drives separate them with a |. This uses a regular expression so take care to
-      specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data"
-   ARG2  Set this to 1 to use volumes names (if they are defined) in plugin output and performance data ie -o 1
-   ARG3  Set this to 1 to include information about the sum of all disk space on the entire system.
-      If you set this you can also check warn/crit against the overall disk space.
-      To show only the overall disk, set ARG3 to 1 and set ARG1 to 1 (actually to any non-existant disk)
-      Eg -o 1 -3 1
-
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checkdrivesize'}.
-
-checkeventlog  
-   ARG1  Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer". You may also use a comma delimited list to specify multiple event logs. You can also specify event log names using the wildcard character % eg system,app%,%shell%. Default is system
-   ARG2  A comma delimited list of severity numbers. If not specfied this defaults to 1. If only one level is specified, all severity levels less than and equal to it are included. If more than one is specified then only those levels are included. To include only a single level, put a comma before the severity number eg ,3.
-   
-       The severity levels available are:  
-       5 = Security Audit Failure.
-       4 = Security Audit Success
-       3 = Information
-       2 = Warning
-       1 = Error
-   
-   ARG3  Number of past hours to check for events. Default is 1
-   ARG4  Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
-      ie use the eventdefault section settings from the ini file. The ini file contains regular expression based inclusion
-      and exclusion rules to accurately define the events you want to or don't want to see. Event inclusions and exlusions rules are ANDed together. See the events.ini file for details.
-   WARN/CRIT   can be used as described below.
-      $field_lists{'checkeventlog'}.
-
-   Examples:  
-      to report all errors (1) that got logged in the past 24 hours in the System event log use:
-      
-      -a System -3 24
-      
-      to report all errors (1) that got logged in the past 24 hours in any event log use:
-      
-      -a % -3 24
-
-      to report all warnings (2) and errors (1) that got logged in the past 4 hours in the Application event log use:
-      
-      -a application -o 2 -3 4 OR -a application -o 1,2 -3 4
-      
-      to report all information (3) and errors (1) that got logged in the past 4 hours in the Application event log use:
-      
-      -a application -o 1,3 -3 4
-      
-      to report only Security Audit Failure (5) events that got logged in the past 4 hours in any event log use:
-      
-      -a % -o ,5 -3 4
-
-      to report your custom mix of event log messages from the system event log use (the names passed to this argument are ini sections defined in an ini file eg event.ini):
-      
-      -4 eventinc_1,eventinc_2,eventinc_3,eventexclude_1
-
-checkfileage  
-   ARG1  full path to the file. Use '/' (forward slash) instead of '\\\\' (backslash).
-   ARG2  set this to one of the time multipliers ($time_multiplier_list)
-      This becomes the display unit and the unit used in the performance data. Default is hr.
-      -z can not be used for this mode.
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checkfileage'}
-      
-      The warning/critical values should be specified in seconds. However you can use the time multipliers
-      ($time_multiplier_list) to make it easier to use
-      
-      eg instead of putting -w 3600 you can use -w 1hr
-      
-      eg instead of putting -w 5400 you can use -w 1.5hr
-      
-      Typically you would specify something like -w 24: -c 48:
-
-checkfilesize  
-   ARG1  full path to the file. Use '/' (forward slash) instead of '\\\\' (backslash).
-      eg "C:/pagefile.sys" or "C:/windows/winhlp32.exe"
-   NODATAEXIT  can be set for this check.
-   WARN/CRIT  can be used as described below.
-   If you specify --nodatamode then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
-      This allows you to control how the plugin responds to non-existant files.
-      $field_lists{'checkfilesize'}.
-
-checkfoldersize  
-   WARNING - This check can be slow and may timeout, especially if including subdirectories. 
-      It can overload the Windows machine you are checking. Use with caution.
-   ARG1  full path to the folder. Use '/' (forward slash) instead of '\\\\' (backslash). eg "C:/Windows"
-   ARG4  Set this to s to include files from subdirectories eg -4 s
-   NODATAEXIT  can be set for this check.
-   WARN/CRIT  can be used as described below.
-   If you specify --nodatamode then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
-      This allows you to control how the plugin responds to non-existant files.
-      $field_lists{'checkfoldersize'}.
-
-checkmem  
-   This mode checks the amount of physical RAM in the system.
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checkmem'}.
-
-checknetwork  
-   These network checks use WMI Raw counters to calculate values over a given timeperiod. 
-   This is much more accurate than taking Formatted WMI values.
-   ARG1  Specify the network interface the stats are collected for.  If set to . all interfaces will be included.
-      To include multiple interfaces separate them with a | or specify a common identifier eg part of an IP Address or MAC Address. This uses a regular expression so take care to
-      specify exactly what you want. eg "LAN0" or "192.168.0.1" or "192.168.0" or "LAN0|LAN2" or "." or "08:00:27:85:CE:6D" or "08:00:27"
-      To specify a network interface you can use either the Connection Name (as seen in Control Panel), IP Address (IPv4 or IPV6) or MAC Address. You can also use the name of the network adaptors as seen from WMI which is similar to what is seen in the output of the ipconfig/all command on Windows. However, it is not exactly the same and can be tricky since this uses a regular expression. Run without -a to show the interface
-      names, IP Addresses, MAC Addresses. Typically you need to use '' around the adapter name when specifying.
-   $default_help_text_delay
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checknetwork'}
-   BYTEFACTOR  defaults to 1000 for this mode. You can override this if you wish.
-
-   Note:  
-      This check does up to 3 WMI queries so it may be slow. You might need to use the -t option. Since 2 of the WMI queries are relatively static, their results are cached and you can set the refresh period for this data using --joinexpiry.
-   
-checkpage  
-   This mode checks the amount of page file usage.
-   The total page file size varies between the Initial size and the Maximum Size you set in Windows.
-   ARG1  Set this to "auto" to automatically set warning/critical levels. The warning level is set to the same as the
-      inital size of the page file. The critical level is set to 80% of the maximum page file size.
-      If set, it is used instead of any command line specification of warning/critical settings.
-      Note: The separate WMI query to obtain the additional information required to use this setting only works if you have set a custom size for your page files. If they are set to "System Managed", this will not work. You can tell if an automatic warning/critical level has been set by examining the performance data for the "Used" value. In this example - "'E:/pagefile.sys Used'=41943040Bytes;104857600;167772160;" you can tell that the levels have been automatically set because there are 3 numeric values in the performance data - the last 2 are the warning and critical levels.
-   ARG2  drive letter page to check. If omitted all page files will be included.
-      To include multiple drives separate them with a |. This uses a regular expression so take care to
-      specify exactly what you want. eg "C:" or "C:|E:". Make sure you use a : after each drive letter to match properly.
-   ARG3  Set this to 1 to include information about the sum of all pages file on the entire system.
-      If you set this you can also check warn/crit against the overall disk space.
-      To show only the overall page file info, set ARG3 to 1 and set ARG2 to 1 (actually to any non-existant disk)
-      Eg -o 1 -3 1
-   ARG4  Set this to 1 to add the RAM values to the Page file values. This option automatically disables the use of ARG1 and ARG2 and automatically sets ARG3 to show only the system totals. The display is simplified to show only Used, Free and Total amounts.
-      Eg -4 1
-
-   WARN/CRIT  can be used as described below.
-   $field_lists{'checkpage'}.
-
-   Note:  
-      This check does up to 2 WMI queries (if -a auto or ARG4 is used) so it may be slow. You might need to use the -t option. Since 1 of the WMI queries (for -a auto) is relatively static, its results are cached and you can set the refresh period for this data using --joinexpiry.
-
-checkprocess  
-   SUBMODE  Set this to Name, ExecutablePath, or Commandline to determine if ARG1 and ARG3 matches against just the
-      process name (Default), the full path of the executable file, or the complete command line used to run the process.
-   ARG1  A regular expression to match against the process name, executable path or complete command line.
-      The matching processes are included in the resulting list. Use . alone to include all processes. Typically the process
-           - Executable Path is like DRIVE:PATH/PROCESSNAME eg C:/WINDOWS/system32/svchost.exe,
-           - Command Line is like DRIVE:PATH/PROCESSNAME PARAMETERS eg C:/WINDOWS/system32/svchost.exe -k LocalService
-         Use '/' (forward slash) instead of '\\\\' (backslash). eg "C:/Windows" or "C:/windows/system32"
-         Note: Any '/' in your regular expression will get converted to '\\\\'.
-   ARG2  Set this to 'Name' (Default), Executablepath or 'Commandline' to display the process names, executablepath or the 
-      whole command line.
-   ARG3  A regular expression to match against the process name, executable path or complete command line.
-      The matching processes are excluded from the resulting list. This exclusion list is applied after the inclusion list.
-      
-   For SUBMODE and ARG2 you only need to specify the minimum required to make it unique. Any of the following will work
-   -s e, -s exe, -s c, -s com, -o e, -o exe, -o c, -o com
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checkprocess'}
-   
-checkservice  
-   ARG1  A regular expression that matches against the short or long service name that can be seen in the properties of the
-      service in Windows. The matching services are included in the resulting list. Use . alone to include all services.
-      Use Auto to check that all automatically started services are OK.
-   ARG2  A regular expression that matches against the short or long service name that can be seen in the properties of the
-      service in Windows. The matching services are excluded in the resulting list.
-      This exclusion list is optional and applied after the inclusion list.
-   ARG3  Optionally used to specify what type of services to display under which conditions. If not specified, all services are shown in all conditions. This is a comma delimited list of specifications in the following format: WHEN=WHAT, where WHEN is one of ok,warning,critical,unknown and WHAT is one of all,ok,bad,none. Examples: "ok=none,warning=bad,critical=bad" or "warning=all,critical=none". So to show only the "bad" services when a warning is given use "warning=bad".
-   ARG4  Used to specify which type of services to display based on the StartMode. Only services with a StartMode matching this regular expression will be included. Examples: To include only manually started services use "-4 manual". To include all automatic and manual services use "-4 auto|man"
-      This list is optional and applied before the exclusion list.
-   WARN/CRIT  can be used as described below. for example to show
-      $field_lists{'checkservice'}
-
-   Note:  
-      A "Good" service is one that is Started, its State is Running and its Status is OK. Anything else is considered "Bad". If you don't want certain services included in this count then you will need to exclude them with -o ARG2
-
-checksmart  
-   Check the SMART status of all hard drives on the system. Will only work for physical drives (ie not on disks in a virtual machine!). Probably will not work for disk array drives as they are not normally presented to the system as disks. Reports if any drives are failing the SMART checks which signals
-      imminent hard drive failure. It also grab various SMART attributes such as temperature. It also grab the disk serial
-      number which may work on OS versions above Win XP and Win Server 2003.
-   ARG1  (optional) By default checksmart shows all of a small set of SMART attributes as peformance data. If you want to reduce this list you can by specifying a comma delimited list of attribute codes. Specify ARG1 as 'none' to obtain no SMART attributes. This will actually remove one of the WMI queries. Specify ARG1 as 'list' to list all the valid attribute codes. If you wish to warn/critical against the temperature value you must at least specify that code (194).
-
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checksmart'}
-
-   Note:  
-      This check does up to 4 WMI queries so it may be slow. You might need to use the -t option. Since 2 of the WMI queries are relatively static, their results are cached and you can set the refresh period for this data using --joinexpiry.
-
-   Examples:  
-      Warn if more than zero drives fail the SMART check or if any of the disk temperatures are above 40 degrees Celcius.
-      
-      -m checksmart -w 0 -w Temperature=40
-      
-      List only the SMART temperature
-      
-      -m checksmart -a 194
-      
-      List Temperature and Power on Hours
-      
-      -m checksmart -a 194,9
-
-checktime  
-   This mode compares the time on the Windows machine to the time on the server running Check WMI Plus. It uses UTC time. use the warning/critical criteria to trigger if the time difference exceeds a threshold that you define.
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checktime'}
-      
-      The warning/critical values should be specified in seconds and you will find a range most useful.
-      
-      Typically you would specify something like -w -10:10 -c -30:30 (to warn if the time difference exceeds 10 seconds and go critical if the time difference exceeds 30 seconds)
-
-checkuptime  
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checkuptime'}
-      
-      The warning/critical values should be specified in seconds. However you can use the time multipliers ($time_multiplier_list) to make it easier to use.
-      
-      eg instead of putting -w 1800 you can use -w 30min
-      
-      eg instead of putting -w 5400 you can use -w 1.5hr
-      
-      Typically you would specify something like -w 20min: -c 10min: (to if less than 20 min and critical if less than 10 min)
-
-checkvolsize  
-   This can be used to monitor volumes mounted as junction points (ie no drive letters) as well as normal logical volumes.
-   Also see checkdrivesize
-   ARG1  drive letter or volume name or volume label of the volume to check. If omitted a list of valid drives will be shown. If set to . all drives will be included.
-      To include multiple volumes separate them with a |. This uses a regular expression so take care to
-      specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data"
-   ARG2  Set this to 1 to use labels (if they are defined) in plugin output and performance data ie -o 1
-   ARG3  Set this to 1 to include information about the sum of all volume space on the entire system.
-      If you set this you can also check warn/crit against the overall volume space.
-      To show only the overall volume, set ARG3 to 1 and set ARG1 to 1 (actually to any non-existant volume)
-   WARN/CRIT  can be used as described below.
-      $field_lists{'checkvolsize'}.
-
-checkwsusserver  
-   If there are any WSUS related errors in the event log in the last 24 hours a CRITICAL state is returned.
-   This mode has been removed. You can perform the same check that this used to perform by using MODE=checkeventlog 
-   using the wsusevents ini section. The command line parameters are:
-   -m checkeventlog -o 2 -3 24 -4 wsusevents -c 0
-
-EOT
-
-# add the inihelp to the end of this help
-show_ini_help_overview(1);
-
-finish_program($ERRORS{'UNKNOWN'});
-}
-#-------------------------------------------------------------------------
 sub display_uptime {
 # pass in an uptime string
 # if it looks like it is in seconds then we convert it to look like days, hours minutes etc
@@ -1845,7 +1361,7 @@ sub get_wmi_data {
 # the WMI query to get the values you are wanting
 # the regular expression to extract the names of the values (comma list like $value_rege not supported as this parameter is not really needed or hardly ever)
 # the regular expression to extract the results - we also support this being a comma delimited list of field numbers to be kept where we assume the field delimiter is | and that the field numbers start at 1 eg 1,4,5
-# an array reference where the results will be placed. Index 0 will contain the first values, index 1 the second values
+# an array reference where the results wiel be placed. Index 0 will contain the first values, index 1 the second values
 # the delay (passed to the sleep command) between queries. This is reference that "passed back" so that the calling sub can see what was actually used. Pass by reference using \$VARIABLE
 # An array reference listing the column titles that we should provide sums for
 #     There are several sums made available
@@ -1912,7 +1428,7 @@ $wmi_query=~s/'/\"/g;
 
 if ($slash_conversion) {
    # replace any / in the WMI query \\ since \ are difficult to use in linux on the command line
-   # we replace it with \\ to pass an actual \ to the command line
+   # we replace it with \\ to pass an actual \ to the csmmand line
    # use # as the delimiter for the regex to make it more readable (still need to escape / and \ though)
    $wmi_query=~s#\/#\\\\#g;   
 }
@@ -1996,7 +1512,6 @@ my @hardcoded_field_list;
 
 my $get_data_for_the_first_time='the state file does not exist';
 my $start_wmi_query_number=0;
-my $keep_state_file='';
 my $keep_state_mode=0;
 my $time_now=time();
 if ($opt_keep_state && $num_samples>1) {
@@ -2428,12 +1943,10 @@ if ($keep_state_mode==1) {
    # check for wmi errors first
    check_for_data_errors($sub_result);
    # add a create timestamp to the data
-   $$results[0][0]{'_KeepStateCreateTimestamp'}=$time_now;
    $debug && print "Storing WMI results in the state file for the first time\n";
-   eval {   store($results,$keep_state_file);   };
-   check_for_store_errors($@);
+   store_state_data($results);
    # now exit the plugin with an unknown state since we only have the first lot of WMI data
-   print "Collecting first WMI sample because $get_data_for_the_first_time. Results will be shown the next time the plugin runs.\n";
+   $plugin_output.="Collecting first WMI sample because $get_data_for_the_first_time. Results will be shown the next time the plugin runs.\n";
    finish_program($ERRORS{'UNKNOWN'});
 } elsif ($keep_state_mode==2) {
    # we retrieved WMI data this time round from the file
@@ -2455,11 +1968,8 @@ if ($keep_state_mode==1) {
          $$stored_results[0][0]{'_ChecksOK'}=1; 
       }
    }
-   $$stored_results[0][0]{'_KeepStateCreateTimestamp'}=time();
-   # now store the data
    $debug && print "Storing new WMI results in the state file " . Dumper($stored_results);
-   eval {   store($stored_results,$keep_state_file);   };
-   check_for_store_errors($@);
+   store_state_data($stored_results);
 }
 
 # if $final_data_array_index is not zero then we have to copy some fields to the new index
@@ -2501,6 +2011,15 @@ if ($final_data_array_index>0) {
 }
 
 return $sub_result,$final_data_array_index;
+}
+#-------------------------------------------------------------------------
+sub store_state_data {
+# pass in
+# reference to what you want to store (which is a a WMI result set)
+my ($results)=@_;
+$$results[0][0]{'_KeepStateCreateTimestamp'}=time();
+eval {   store($results,$keep_state_file);   };
+check_for_store_errors($@);
 }
 #-------------------------------------------------------------------------
 sub combine_display_and_perfdata {
@@ -2725,6 +2244,7 @@ foreach my $field (@{$performance_data_fields}) {
          }
    
          $debug && print "$field (Field=$this_real_field_name) ----> '$this_display_field_name'=$this_value$this_unit;$warn_perf_spec;$crit_perf_spec; \n";
+         # we always add a space at the end of the performance data to make sure it is separated from any following performance data
          $performance_data_string.="'$this_display_field_name'=$this_value$this_unit;$warn_perf_spec;$crit_perf_spec; ";
       } else {
          # the perf data does not even look like a number so it may make the perf data handling software fail
@@ -2736,14 +2256,30 @@ foreach my $field (@{$performance_data_fields}) {
    }
 }
 
-# remove any ;; from performance data so that it contains only the minimum required
+# remove any trailing ;; from performance data so that it contains only the minimum required
 $_=$performance_data_string;
-while ($performance_data_string=~s/;;/;/g) {}
+# the performance data always ends in a one space since we added it a few lines above
+# hence trailing ;; will be followed by a space and we need to maintain the space at the end
+while ($performance_data_string=~s/;; /; /g) {}
 
 $debug && print "---------- Done\n";
 
 my $combined_string=combine_display_and_perfdata($display_string,$performance_data_string);
  
+if ($opt_show_fields) {
+   # user has asked to see all the fields that this check uses
+   # this is normally only run when the user is tryigng to work out what fields they can use in a specific check
+   # our best bet is to look in the hash $values
+   print "Fields available/used in this check are:\n";
+   print "========================================\n";
+   printf("\%-30s %s\n",'FIELDNAME','SAMPLE VALUE');
+   printf("\%-30s %s\n",'---------','------------');
+   foreach my $key (sort keys %{$values}) {
+      printf("\%-30s %s\n",$key,$$values{$key}||'');
+   }
+   print "\n";
+}
+
 return $display_string,$performance_data_string,$combined_string;
 }
 #-------------------------------------------------------------------------
@@ -2762,7 +2298,7 @@ if ($the_arguments{'_nodatamode'}) {
    # we have to go warning/critical if there is not data returned by the WMI query
    if ($itemcount eq '0') {
       # if there is a custom string defined then use that
-      print $the_arguments{'_nodatastring'};
+      $plugin_output.=$the_arguments{'_nodatastring'};
       # we exit with the value the user specified in $the_arguments{'_nodataexit'}, if any
       if ($the_arguments{'_nodataexit'} ge 0 && $the_arguments{'_nodataexit'} le 3) {
          $debug && print "Exit with user defined exit code $the_arguments{'_nodataexit'}\n";
@@ -3313,7 +2849,7 @@ if ($@) {
          print "Divide by Zero error. Sometimes this happens if you are using a Win32_PerfFormattedData class when you should be using a Win32_PerfRAWData class (this check will continually get this error). It can also happen if the 2nd WMI query, for a check that requires 2 WMI queries, fails (this might be a transient problem). Also, you might have forgotten to include a time-based field (eg Timestamp_Sys100NS, Frequency_Sys100NS), which is required for the calculation, in your WMI query.";
       }
    }
-   print "The actual error text is: $@ ";
+   $plugin_output.="The actual error text is: $@ ";
    finish_program($ERRORS{'UNKNOWN'});
 }
 
@@ -3466,13 +3002,13 @@ sub check_for_store_errors {
 # the output of the eval ie $@
 my ($data_errors)=@_;
 if ($data_errors) {
-   print "UNKNOWN - ";
+   $plugin_output.="UNKNOWN - ";
    if ($data_errors=~/Permission denied/i) {
-      print "Permission denied when trying to store the state data. Sometimes this happens if you have been testing the plugin from the command line as a different user to the Nagios process user. You will need to change the permissions on the file or remove it. ";
+      $plugin_output.="Permission denied when trying to store the state data. Sometimes this happens if you have been testing the plugin from the command line as a different user to the Nagios process user. You will need to change the permissions on the file or remove it. ";
    } else {
-      print "There was an error while trying to store the state data. ";
+      $plugin_output.="There was an error while trying to store the state data. ";
    }
-   print "The actual error text is: $data_errors";
+   $plugin_output.="The actual error text is: $data_errors";
    finish_program($ERRORS{'UNKNOWN'});
 }
 }
@@ -3482,40 +3018,44 @@ sub check_for_data_errors {
 # the output of the wmi query sub
 my ($data_errors)=@_;
 if ($data_errors) {
-   print "UNKNOWN - The WMI query had problems.";
+   $plugin_output.="UNKNOWN - The WMI query had problems.";
    if ($data_errors=~/NT_STATUS_ACCESS_DENIED/i) {
       my $extra_msg='';
       if ($opt_auth_file) {
          $extra_msg=" Your Authentication File might be incorrectly formatted or inaccessible. ";
       }
-      print " You might have your username/password wrong or the user's access level is too low. ${extra_msg}Wmic error text on the next line.\n";
+      $plugin_output.=" You might have your username/password wrong or the user's access level is too low. ${extra_msg}Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041010/i) {
-      print " The plugin is having trouble finding the required WMI Classes on the target host ($the_arguments{_host}). There can be multiple reasons for this (please go through them and check) including permissions problems (try using an admin login) or software that creates the class is not installed (eg if you are trying to checkiis but IIS is not installed). It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes the WMI service is not running, other times a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
+      $plugin_output.=" The plugin is having trouble finding the required WMI Classes on the target host ($the_arguments{_host}). There can be multiple reasons for this (please go through them and check) including permissions problems (try using an admin login) or software that creates the class is not installed (eg if you are trying to checkiis but IIS is not installed). It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes the WMI service is not running, other times a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x8007000e/i) { 
-      print " We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of services. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+      $plugin_output.=" We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of services. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/0x80041003/i) { 
+      $plugin_output.=" This is most likely a WMI permissions error. The process trying to access the WMI namespace most likely does not have the correct WMI permissions. The following link is believed to be relevant for Windows Server 2003, 2008R2 and 2012R2 - http://support.microsoft.com/kb/907460. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041004/i) { 
-      print " We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of processes. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+      $plugin_output.=" We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of processes. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041045/i) { 
-      print " We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+      $plugin_output.=" We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041045/i) { 
-      print " We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+      $plugin_output.=" We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/0x800706ba|c00000b5/i) { 
+      $plugin_output.="  This error can appear when the Windows firewall on the target machine is blocking the connection. There may be other causes. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x800705af/i) { 
       # error reported by toni.garcia@sistel.es
-      print "  This error appears to mean that the paging file is too small for this operation to complete, but if there sufficient paging space, you can reboot the $the_arguments{_host} as a workaround.\n. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+      $plugin_output.="  This error appears to mean that the paging file is too small for this operation to complete, but if there sufficient paging space, you can reboot the $the_arguments{_host} as a workaround.\n. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_IO_TIMEOUT/i) {
-      print " The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Is $the_arguments{_host} the correct hostname?. The host might even be up but just too busy. Wmic error text on the next line.\n";
+      $plugin_output.=" The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Is $the_arguments{_host} the correct hostname?. The host might even be up but just too busy. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_HOST_UNREACHABLE/i) {
-      print " The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Looks like a valid name/IP Address. $the_arguments{_host} is probably not even pingable. Wmic error text on the next line.\n";
+      $plugin_output.=" The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Looks like a valid name/IP Address. $the_arguments{_host} is probably not even pingable. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_UNEXPECTED_NETWORK_ERROR/i) {
-      print " This error has been reported when your DNS lookup configuration is not quite right. $the_arguments{_host} might be using a FQDN and/or you have no 'search' setting in your /etc/resolv.conf file. Wmic error text on the next line.\n";
+      $plugin_output.=" This error has been reported when your DNS lookup configuration is not quite right. $the_arguments{_host} might be using a FQDN and/or you have no 'search' setting in your /etc/resolv.conf file. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_CONNECTION_REFUSED/i) {
-      print " The target host ($the_arguments{_host}) did not allow our network connection. It is a valid name/IP Address. A firewall might be blocking us. There might be some critical services not running. Is it even running Windows?  Wmic error text on the next line.\n";
+      $plugin_output.=" The target host ($the_arguments{_host}) did not allow our network connection. It is a valid name/IP Address. A firewall might be blocking us. There might be some critical services not running. Is it even running Windows?  Wmic error text on the next line.\n";
    } elsif ($data_errors=~/^.{0,5}TIMEOUT.{0,5}$/i) {
-      print " The WMI Client Library timed out. There are multiple possible reasons for this, some of them include - The host $the_arguments{_host} might just be really busy, it might not even be running Windows. Error text on the next line.\n";
+      $plugin_output.=" The WMI Client Library timed out. There are multiple possible reasons for this, some of them include - The host $the_arguments{_host} might just be really busy, it might not even be running Windows. Error text on the next line.\n";
    } else {
-      print " The error text from wmic is: ";
+      $plugin_output.=" The error text from wmic is: ";
    }
-   print $data_errors;
+   $plugin_output.=$data_errors;
    finish_program($ERRORS{'UNKNOWN'});
 }
 }
@@ -3596,11 +3136,16 @@ if ($#$specifications>=0) {
    if ($num_exclusions>0) {
       # load the new data into the data array for the new last query data
       @{$$wmidata[$last_wmi_data_index]}=@new_wmi_query_data;
+      
+      # I can't think why I would ever have wanted to do this - the include/excludes work on the $last_wmi_data_index only
+      # So why would we want to change the previous results to the same as the new results?
+      # first discovered that this was wrong with checkprintjobs      
       # load the new first wmi query data, if we have not already
-      if ($last_wmi_data_index>0) {
-         @{$$wmidata[0]}=@new_first_wmi_query_data;
-      }
+      #if ($last_wmi_data_index>0) {
+      #   @{$$wmidata[0]}=@new_first_wmi_query_data;
+      #}
       # run a no data check since we changed the data
+
       no_data_check($$wmidata[$last_wmi_data_index][0]{'_ItemCount'});
    }
 
@@ -3637,7 +3182,7 @@ if (!exists($$new_data_array[0]{'_ItemCount'})) {
       foreach my $field (keys %{$old_data_hash}) {
          # see if this key exists in the new Row 0
          if (!exists($$new_data_array[0]{$field})) {
-            $debug && print "Copying field $field\n";
+            $debug && print "Copying field $field (Value=$$old_data_hash{$field})\n";
             $$new_data_array[0]{$field}=$$old_data_hash{$field};
          }
       }
@@ -3972,19 +3517,19 @@ if ($query) {
       $overall_display_info=~s/(.*?Sample Period.*?) \(Sample Period \d+ sec\)(.*)/$1$2/; # now remove any other ones
 
       my $overall_combined_data=combine_display_and_perfdata($overall_display_info,$overall_performance_data);
-      print $overall_combined_data;
+      $plugin_output.=$overall_combined_data;
    
       $use_pro_library && endtimer('Post Processing');
       $use_pro_library && endtimer('Process INI Check');
       finish_program($overall_test_result);
       
    } else {
-      print "UNKNOWN - No predisplay or display field(s) specified in ini file section '$ini_section'\n";
+      $plugin_output.="UNKNOWN - No predisplay or display field(s) specified in ini file section '$ini_section'\n";
       finish_program($ERRORS{'UNKNOWN'});
    }
 
 } else {
-   print "UNKNOWN - Query not specified in ini file section '$ini_section'\n";
+   $plugin_output.="UNKNOWN - Query not specified in ini file section '$ini_section'\n";
    finish_program($ERRORS{'UNKNOWN'});
 }
 
@@ -4000,7 +3545,7 @@ my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
 check_for_data_errors($data_errors);
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 
 finish_program($test_result);
 
@@ -4025,7 +3570,7 @@ calc_new_field('_AvgCPU','PERF_100NSEC_TIMER_INV','PercentProcessorTime,%.2f,100
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 
 finish_program($test_result);
 }
@@ -4076,7 +3621,8 @@ my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('NetMacMap',\@c
    "select macaddress,netconnectionID from win32_networkadapter where netconnectionid like '%'",
    '','',\@netid_mapping,\$the_arguments{'_delay'},undef,0);
 
-
+# process includes and excludes of WMI data for Pro - after all WMI queries and joins and after check_for_data_errors - before we start looking through the returned WMI data
+$use_pro_library && process_cludes_like_a_pro(\@opt_include_data,\@opt_exclude_data,\@collected_data,1,$last_wmi_data_index);
 
 # now loop through the results, showing the ones requested
 my $i=0; # we need to count the rows of data as we process them as this is used by calc_new_field()
@@ -4158,11 +3704,11 @@ if ($collected_data[$last_wmi_data_index][0]{'_NumInterfaces'}>0) {
    # only row 0 or the query might have it so that means there is only ever going to be 2 and we have to remove the 2nd one
    $overall_combined_data=~s/(.*?Sample Period.*?) \(Sample Period \d+ sec\)(.*)/$1$2/; # now remove any other ones
    
-   print $overall_combined_data;
+   $plugin_output.=$overall_combined_data;
    
    finish_program($overall_test_result);
 } else {
-   print "No Network Interfaces specified. Valid Interface Names are:\n" . list_collected_values_from_all_rows(\@collected_data,['Name','NetConnectionID','IPAddress','MACAddress'],"\n",', ',0) . "\nSpecify the -a parameter with an adapter name. Use ' ' around the adapter name.\n";
+   $plugin_output."No Network Interfaces specified. Valid Interface Names are:\n" . list_collected_values_from_all_rows(\@collected_data,['Name','NetConnectionID','IPAddress','MACAddress'],"\n",', ',0) . "\nSpecify the -a parameter with an adapter name. Use ' ' around the adapter name.\n";
    finish_program($ERRORS{'UNKNOWN'});
 
 }
@@ -4195,7 +3741,7 @@ $collected_data[$last_wmi_data_index][0]{'_CPUQPoints'}=list_collected_values_fr
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 finish_program($test_result);
 
 }
@@ -4370,7 +3916,7 @@ if ($return_values || $the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i 
    #   $collected_data[0][0]{'_MemTotalK'}=$collected_data[0][0]{'TotalVirtualMemorySize'}||0;
 
 } else {
-   print "UNKNOWN - invalid SUBMODE in the checkmem function - should be page or physical.\n";
+   $plugin_output.="UNKNOWN - invalid SUBMODE in the checkmem function - should be page or physical.\n";
    finish_program($ERRORS{'UNKNOWN'});
 }
 
@@ -4392,7 +3938,7 @@ if ($return_values) {
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
    
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 finish_program($test_result);
   
 }
@@ -4476,6 +4022,9 @@ if ($the_arguments{'_arg3'}) {
    $collected_data[$last_wmi_data_index][0]{'PeakUsage'}=$collected_data[$last_wmi_data_index][0]{'_ColSum_PeakUsage'};
 
 }
+
+# process includes and excludes of WMI data for Pro - after all WMI queries and joins and after check_for_data_errors - before we start looking through the returned WMI data
+$use_pro_library && process_cludes_like_a_pro(\@opt_include_data,\@opt_exclude_data,\@collected_data,1,$last_wmi_data_index);
 
 # now loop through the results, showing the ones requested
 foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
@@ -4577,11 +4126,11 @@ if ($results_text) {
 
    my ($overall_display_info,$overall_performance_data,$overall_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$pre_display_fields{$opt_mode},undef,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
    $overall_combined_data=combine_display_and_perfdata("$overall_display_info$results_text",$performance_data);
-   print $overall_combined_data;
+   $plugin_output.=$overall_combined_data;
 
    finish_program($exit_type);
 } else {
-   print "UNKNOWN - Could not find a drive matching '$the_arguments{'_arg2'}' or the WMI data returned is invalid. Available Page Files are " . list_collected_values_from_all_rows(\@collected_data,['Name'],', ','',0);
+   $plugin_output.="UNKNOWN - Could not find a drive matching '$the_arguments{'_arg2'}' or the WMI data returned is invalid. Available Page Files are " . list_collected_values_from_all_rows(\@collected_data,['Name'],', ','',0);
    finish_program($ERRORS{'UNKNOWN'});
 }
 
@@ -4639,15 +4188,15 @@ if ($collected_data[$last_wmi_data_index][0]{'Name'}) {
       }
       
       my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-      print $this_combined_data;
+      $plugin_output.=$this_combined_data;
       
       finish_program($test_result);
    } else {
-      print "UNKNOWN - Could not correct recognise the returned time format $lastmodified";
+      $plugin_output.="UNKNOWN - Could not correct recognise the returned time format $lastmodified";
       finish_program($ERRORS{'UNKNOWN'});
    }
 } else {
-   print "UNKNOWN - Could not find the file $the_arguments{'_arg1'}";
+   $plugin_output.="UNKNOWN - Could not find the file $the_arguments{'_arg1'}";
    finish_program($ERRORS{'UNKNOWN'});
 }
    
@@ -4669,7 +4218,7 @@ no_data_check($collected_data[$last_wmi_data_index][0]{'_ItemCount'});
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;;
+$plugin_output.=$this_combined_data;;
 
 finish_program($test_result);
 }
@@ -4688,7 +4237,7 @@ if ($the_arguments{'_arg1'}=~/^(\w:)(.*)/) {
    $drive_letter=$1;
    $path=$2;
 } else {
-   print "Could not extract drive letter and path from $the_arguments{'_arg1'}\n";
+   $plugin_output.="Could not extract drive letter and path from $the_arguments{'_arg1'}\n";
    finish_program($ERRORS{'UNKNOWN'});
 }
 
@@ -4725,9 +4274,21 @@ if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}>0) {
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 
 finish_program($test_result);
+}
+#-------------------------------------------------------------------------
+sub checkgroup {
+$use_pro_library && checkgroup_pro();
+}
+#-------------------------------------------------------------------------
+sub checkgroupuser {
+$use_pro_library && checkgroupuser_pro();
+}
+#-------------------------------------------------------------------------
+sub checklogon {
+$use_pro_library && checklogon_pro();
 }
 #-------------------------------------------------------------------------
 sub checkwsusserver {
@@ -4761,6 +4322,10 @@ if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}==0) {
    finish_program($ERRORS{'CRITICAL'});
 }
 
+}
+#-------------------------------------------------------------------------
+sub checkprintjob {
+$use_pro_library && checkprintjob_pro();
 }
 #-------------------------------------------------------------------------
 sub checkprocess {
@@ -4800,6 +4365,9 @@ my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 check_for_data_errors($data_errors);
+
+# process includes and excludes of WMI data for Pro - after all WMI queries and joins and after check_for_data_errors - before we start looking through the returned WMI data
+$use_pro_library && process_cludes_like_a_pro(\@opt_include_data,\@opt_exclude_data,\@collected_data,1,$last_wmi_data_index);
 
 # at this point we can assume that we have all the data we need stored in @collected_data
 my $result_text='';
@@ -4866,8 +4434,12 @@ if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}>0) {
 
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 finish_program($test_result);
+}
+#-------------------------------------------------------------------------
+sub checkquota {
+$use_pro_library && checkquota_pro();
 }
 #-------------------------------------------------------------------------
 sub checktime {
@@ -4913,7 +4485,7 @@ $debug && print Dumper(\@collected_data);
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 
 finish_program($test_result);
   
@@ -4949,6 +4521,9 @@ my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 check_for_data_errors($data_errors);
+
+# process includes and excludes of WMI data for Pro - after all WMI queries and joins and after check_for_data_errors - before we start looking through the returned WMI data
+$use_pro_library && process_cludes_like_a_pro(\@opt_include_data,\@opt_exclude_data,\@collected_data,1,$last_wmi_data_index);
 
 # at this point we can assume that we have all the data we need stored in @collected_data
 my %result_text=(
@@ -5039,10 +4614,14 @@ $debug && print "Since status=$test_result, results shown are: $displaywhatwhen_
 $collected_data[$last_wmi_data_index][0]{'_ServiceList'}=$result_text{$displaywhatwhen_mode_list{$test_result}};
 
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 
 finish_program($test_result);
 
+}
+#-------------------------------------------------------------------------
+sub checkshare {
+$use_pro_library && checkshare_pro();
 }
 #-------------------------------------------------------------------------
 sub checksmart {
@@ -5078,9 +4657,9 @@ if ($the_arguments{'_arg1'}) {
       }
       if (scalar keys %new_smartattributes==0) {
          # show user a list of valid attributes
-         print "Valid Attribute Codes are: ";
+         $plugin_output.="Valid Attribute Codes are: ";
          foreach my $code (sort keys %smartattributes) {
-            print "$code ($smartattributes{$code})  ";
+            $plugin_output.="$code ($smartattributes{$code})  ";
          }
          finish_program($ERRORS{'UNKNOWN'});
       }
@@ -5115,6 +4694,9 @@ my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('InstPNPDev',\@
 ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('TagSN',\@collected_data,$last_wmi_data_index,'DeviceID','',undef,'Tag','',undef,1,'',
    "Select Tag,SerialNumber from Win32_PhysicalMedia",
    '','',\@serial_mapping,\$the_arguments{'_delay'},undef,0);
+
+# process includes and excludes of WMI data for Pro - after all WMI queries and joins and after check_for_data_errors - before we start looking through the returned WMI data
+$use_pro_library && process_cludes_like_a_pro(\@opt_include_data,\@opt_exclude_data,\@collected_data,1,$last_wmi_data_index);
 
 # now that we have joined all our data we should be able to check our smart status, show various smart values and display them with the model and serial numbers
 
@@ -5189,9 +4771,13 @@ my $overall_test_result=work_out_overall_exit_code(\@collected_data,1,$last_wmi_
 my ($overall_display_info,$overall_performance_data,$overall_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$pre_display_fields{$opt_mode},undef,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 
 $overall_combined_data=combine_display_and_perfdata("$overall_display_info\n$results_text",$performance_data);
-print $overall_combined_data;
+$plugin_output.=$overall_combined_data;
 
 finish_program($overall_test_result);
+}
+#-------------------------------------------------------------------------
+sub checkstartupcommand {
+$use_pro_library && checkstartupcommand_pro();
 }
 #-------------------------------------------------------------------------
 sub checkuptime {
@@ -5227,9 +4813,13 @@ if ($critical_perf_specs_parsed{'_UptimeSec'} ne '') {
 
 
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 
 finish_program($test_result);
+}
+#-------------------------------------------------------------------------
+sub checkuseraccount {
+$use_pro_library && checkuseraccount_pro();
 }
 #-------------------------------------------------------------------------
 sub checkdrivesize {
@@ -5246,11 +4836,15 @@ my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
 
 check_for_data_errors($data_errors);
 
+# process includes and excludes of WMI data for Pro - after all WMI queries and joins and after check_for_data_errors - before we start looking through the returned WMI data
+$use_pro_library && process_cludes_like_a_pro(\@opt_include_data,\@opt_exclude_data,\@collected_data,1,$last_wmi_data_index);
+
 my $results_text='';
 my $result_code=$ERRORS{'UNKNOWN'};
 my $performance_data='';
 my $num_critical=0;
 my $num_warning=0;
+my $num_ok=0;
 my $alldisk_identifier='Overall Disk';
 
 $debug && print "WMI Index = $last_wmi_data_index\n";
@@ -5276,7 +4870,32 @@ if ($the_arguments{'_arg3'}) {
 
 }
 
+if (!defined($the_arguments{'_arg4'})) {
+   # set it to the default of zero
+   $the_arguments{'_arg4'}='00';
+}
+
+# work out the display modes
+# ARG4 is a 2 character string formatted like XY
+# where 
+# X=0, display not ok drives first
+# X=1, display drives in the order of the WMI query results
+# X=2, only display not ok drives
+# X=3, normal display (like X=1) when all ok, but if some not ok, then only show not
+# Y=0, show results on a single line
+# Y=1, show results as multi-line with the first line being a high level summary of status 
+my $display_mode_x=substr($the_arguments{'_arg4'},0,1) || '0';
+my $display_mode_y=substr($the_arguments{'_arg4'},1,1) || '0';
+
+my $inter_item_line_feed='     ';
+if ($display_mode_y eq '1') {
+   $inter_item_line_feed="\n";
+}
+
 # now loop through the results, showing the ones requested
+my $items_with_ok_status='';
+my $items_with_not_ok_status='';
+my $items_with_ok_status_summary='';
 foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    # make sure $$row{'VolumeName'} is initialised (it won't be unless the drive has been named)
    $debug && print "ROW BEFORE: " . Dumper($row);
@@ -5309,6 +4928,8 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
             $num_critical++;
          } elsif ($test_result==$ERRORS{'WARNING'}) {
             $num_warning++;
+         } elsif ($test_result==$ERRORS{'OK'}) {
+            $num_ok++;
          }
 
          # by default, in the performance data we use the drive letter to identify the drive
@@ -5324,8 +4945,21 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
          
          my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($row,$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 
-         # concatenate the per drive results together
-         $results_text.="$this_display_info     ";
+         # setup various variables with the display results
+         # we decide which combinations we use later on
+         if ($test_result==$ERRORS{'OK'}) {
+            # this drive is OK, so collect it and then show all the OK drives at the end
+            $items_with_ok_status.="$this_display_info$inter_item_line_feed";
+            $items_with_ok_status_summary.="$$row{'DiskDisplayName'},";
+         } else {
+            # this drive is not OK, show show it now
+            $items_with_not_ok_status.="$this_display_info$inter_item_line_feed";
+         }
+         
+         # alway set up the normal order results
+         $results_text.="$this_display_info$inter_item_line_feed";
+
+         # concatenate the per drive performance results together always in normal order
          $performance_data.=$this_performance_data;
 
       } else {
@@ -5335,13 +4969,42 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    $debug && print "ROW AFTER: " . Dumper($row);   
 }
 
+# decide which drives to show
+if ($display_mode_x eq '0') {
+   # X=0, normal full display, not ok drives first
+   $results_text="$items_with_not_ok_status$items_with_ok_status";
+} elsif ($display_mode_x eq '1') {
+   # X=1, display drives in the order of the WMI query results
+   # $results_text is left untouched
+} elsif ($display_mode_x eq '2') {
+   # X=2, only display not ok drives
+   # remove last comma from summary list
+   $items_with_ok_status_summary=~s/, *$//;
+   $results_text="$items_with_not_ok_status. Not showing $num_ok items with an OK status ($items_with_ok_status_summary)";
+} elsif ($display_mode_x eq '3') {
+   # X=3, normal display (like X=1) when all ok, but if some not ok, then only show not
+   if ($items_with_not_ok_status) {
+      # remove last comma from summary list
+      $items_with_ok_status_summary=~s/, *$//;
+      # display is like X=2, since there are some not ok drives
+      $results_text="${items_with_not_ok_status}Not showing $num_ok items with an OK status ($items_with_ok_status_summary)";
+   } else {
+      # leave $results_text untouched since there are no not_ok drives
+   }
+}
+
+if ($display_mode_y eq '1') {
+   # we have a multiline display, so make the first line a summary status
+   $results_text="Drive Status Summary: OK=$num_ok, WARNING=$num_warning, CRITICAL=$num_critical. Details on the next line\n$results_text";
+}
+
 if ($results_text) {
    # show the results
    # remove the last ", "
    $results_text=~s/, +$//;
    # correctly combine the results and perfdata
    my $combined_string=combine_display_and_perfdata($results_text,$performance_data);
-   print $combined_string;
+   $plugin_output.=$combined_string;
    if ($num_critical>0) {
       finish_program($ERRORS{'CRITICAL'});
    } elsif ($num_warning>0) {
@@ -5350,7 +5013,7 @@ if ($results_text) {
       finish_program($ERRORS{'OK'});
    }
 } else {
-   print "UNKNOWN - Could not find a drive matching '$the_arguments{'_arg1'}' or the WMI data returned is invalid. Available Drives are " . list_collected_values_from_all_rows(\@collected_data,['DeviceID'],', ','',0);
+   $plugin_output.="UNKNOWN - Could not find a drive matching '$the_arguments{'_arg1'}' or the WMI data returned is invalid. Available Drives are " . list_collected_values_from_all_rows(\@collected_data,['DeviceID'],', ','',0);
    finish_program($ERRORS{'UNKNOWN'});
 }
 
@@ -5369,11 +5032,15 @@ my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
 
 check_for_data_errors($data_errors);
 
+# process includes and excludes of WMI data for Pro - after all WMI queries and joins and after check_for_data_errors - before we start looking through the returned WMI data
+$use_pro_library && process_cludes_like_a_pro(\@opt_include_data,\@opt_exclude_data,\@collected_data,1,$last_wmi_data_index);
+
 my $results_text='';
 my $result_code=$ERRORS{'UNKNOWN'};
 my $performance_data='';
 my $num_critical=0;
 my $num_warning=0;
+my $num_ok=0;
 my $alldisk_identifier='Overall Volumes';
 
 if ($the_arguments{'_arg3'}) {
@@ -5397,8 +5064,32 @@ if ($the_arguments{'_arg3'}) {
       $collected_data[$last_wmi_data_index][0]{'Capacity'}=$collected_data[$last_wmi_data_index][0]{'_ColSum_Capacity'};
 }
 
+if (!defined($the_arguments{'_arg4'})) {
+   # set it to the default of zero
+   $the_arguments{'_arg4'}='00';
+}
+
+# work out the display modes
+# ARG4 is a 2 character string formatted like XY
+# where 
+# X=0, display not ok drives first
+# X=1, display drives in the order of the WMI query results
+# X=2, only display not ok drives
+# Y=0, show results on a single line
+# Y=1, show results as multi-line with the first line being a high level summary of status 
+my $display_mode_x=substr($the_arguments{'_arg4'},0,1) || '0';
+my $display_mode_y=substr($the_arguments{'_arg4'},1,1) || '0';
+
+my $inter_item_line_feed='     ';
+if ($display_mode_y eq '1') {
+   $inter_item_line_feed="\n";
+}
+
 # now loop through the results, showing the ones requested
-# we searc the following fields: DeviceID, Label and Name
+# we search the following fields: DeviceID, Label and Name
+my $items_with_ok_status='';
+my $items_with_not_ok_status='';
+my $items_with_ok_status_summary='';
 foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    # make sure $$row{'Label'} is initialised (it won't be unless the drive has been named)
    $$row{'Label'}=$$row{'Label'} || '';
@@ -5422,6 +5113,8 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
             $num_critical++;
          } elsif ($test_result==$ERRORS{'WARNING'}) {
             $num_warning++;
+         } elsif ($test_result==$ERRORS{'OK'}) {
+            $num_ok++;
          }
 
          # by default, in the performance data we use the Name to identify the drive
@@ -5438,8 +5131,21 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
          
          my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($row,$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 
-         # concatenate the per drive results together
-         $results_text.="$this_display_info     ";
+         # setup various variables with the display results
+         # we decide which combinations we use later on
+         if ($test_result==$ERRORS{'OK'}) {
+            # this drive is OK, so collect it and then show all the OK drives at the end
+            $items_with_ok_status.="$this_display_info$inter_item_line_feed";
+            $items_with_ok_status_summary.="$$row{'VolumeDisplayName'},";
+         } else {
+            # this drive is not OK, show show it now
+            $items_with_not_ok_status.="$this_display_info$inter_item_line_feed";
+         }
+         
+         # alway set up the normal order results
+         $results_text.="$this_display_info$inter_item_line_feed";
+
+         # concatenate the per drive performance results together always in normal order
          $performance_data.=$this_performance_data;
 
       } else {
@@ -5448,13 +5154,42 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    }
 }
 
+# decide which drives to show
+if ($display_mode_x eq '0') {
+   # X=0, normal full display, not ok drives first
+   $results_text="$items_with_not_ok_status$items_with_ok_status";
+} elsif ($display_mode_x eq '1') {
+   # X=1, display drives in the order of the WMI query results
+   # $results_text is left untouched
+} elsif ($display_mode_x eq '2') {
+   # X=2, only display not ok drives
+   # remove last comma from summary list
+   $items_with_ok_status_summary=~s/, *$//;
+   $results_text="$items_with_not_ok_status. Not showing $num_ok items with an OK status ($items_with_ok_status_summary)";
+} elsif ($display_mode_x eq '3') {
+   # X=3, normal display (like X=1) when all ok, but if some not ok, then only show not
+   if ($items_with_not_ok_status) {
+      # remove last comma from summary list
+      $items_with_ok_status_summary=~s/, *$//;
+      # display is like X=2, since there are some not ok drives
+      $results_text="${items_with_not_ok_status}Not showing $num_ok items with an OK status ($items_with_ok_status_summary)";
+   } else {
+      # leave $results_text untouched since there are no not_ok drives
+   }
+}
+
+if ($display_mode_y eq '1') {
+   # we have a multiline display, so make the first line a summary status
+   $results_text="Drive Status Summary: OK=$num_ok, WARNING=$num_warning, CRITICAL=$num_critical. Details on the next line\n$results_text";
+}
+
 if ($results_text) {
    # show the results
    # remove the last ", "
    $results_text=~s/, +$//;
    # correctly combine the results and perfdata
    my $combined_string=combine_display_and_perfdata($results_text,$performance_data);
-   print $combined_string;
+   $plugin_output.=$combined_string;
    if ($num_critical>0) {
       finish_program($ERRORS{'CRITICAL'});
    } elsif ($num_warning>0) {
@@ -5463,7 +5198,7 @@ if ($results_text) {
       finish_program($ERRORS{'OK'});
    }
 } else {
-   print "UNKNOWN - Could not find a volume matching '$the_arguments{'_arg1'}'. Available Volumes are " . list_collected_values_from_all_rows(\@collected_data,['Name'],', ','',0);
+   $plugin_output.="UNKNOWN - Could not find a volume matching '$the_arguments{'_arg1'}'. Available Volumes are " . list_collected_values_from_all_rows(\@collected_data,['Name'],', ','',0);
    finish_program($ERRORS{'UNKNOWN'});
 }
 
@@ -5480,7 +5215,17 @@ my %severity_level_descriptions=(
 
 my $wmi_ini;
 
+my $event_mode='';
 # set default values if not specified
+if (!defined($the_arguments{'_arg5'})) {
+   # set to default mode
+   # options:
+   # any - include/exclude event log records that match any of the inclusion criteria
+   # includeall - include event log records that match all of the inclusion criteria
+   $event_mode=$event_modes{'ANY'};
+} else {
+   $event_mode=$event_modes{uc($the_arguments{'_arg5'})};
+}
 
 # -------------- $the_arguments{'_arg4'} is undef if not used, if this is the case then set it to our default ini section
 if (!defined($the_arguments{'_arg4'})) {
@@ -5575,7 +5320,7 @@ my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
 
 check_for_data_errors($data_errors);
 
-my @newdata=process_event_clusions($the_arguments{'_arg4'},\@{$collected_data[$last_wmi_data_index]},$wmi_ini);
+my @newdata=process_event_clusions($event_mode,$the_arguments{'_arg4'},\@{$collected_data[$last_wmi_data_index]},$wmi_ini);
 # @newdata will totally replace the wmi data from the query, so we need to do it and then update _ItemCount
 $collected_data[$last_wmi_data_index]=\@newdata;
 
@@ -5589,7 +5334,7 @@ if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}>0) {
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-print $this_combined_data;
+$plugin_output.=$this_combined_data;
 
 finish_program($test_result);
 }
@@ -5621,6 +5366,8 @@ sub wmi_data_join {
 
 # additionally we make the values all lower case for comparison
 my ($use_join_state_file,$base_array,$last_wmi_data_index,$base_field,$base_regex,$base_replacement,$extra_field,$extra_regex,$extra_replacement,$num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion)=@_;
+
+$debug && print "Performing Join on MWI data using $base_field ($base_regex) to match to $extra_field ($extra_regex) in data from $wmi_query\n";
 
 my $perform_wmi_query='the join state file does not exist';
 my $join_state_file='';
@@ -5658,7 +5405,7 @@ if ($use_join_state_file) {
             $perform_wmi_query="there was a problem retrieving the previous join state data ($join_state_file). The file has expired anyway ($fileage seconds old)";
          } else {
             # some other error
-            print "There was a problem retrieving the previous join state data ($join_state_file). If this error persists you may need to remove the join state data file. The error message was: $@";
+            $plugin_output.="There was a problem retrieving the previous join state data ($join_state_file). If this error persists you may need to remove the join state data file. The error message was: $@";
             finish_program($ERRORS{'UNKNOWN'});
          }
       }
@@ -5737,9 +5484,9 @@ for (my $query_number=$last_wmi_data_index;$query_number<=$last_wmi_data_index;$
       if ($extra_regex) {
          if (defined($extra_replacement)) {
             $extra_value=~s/$extra_regex/$extra_replacement/ig;
-            $debug && print "Applying Regex $extra_regex and replacing with $extra_replacement gives $extra_value\n";
+            $debug && print "Applying Regex $extra_regex on $extra_value and replacing with $extra_replacement gives $extra_value\n";
          } else {
-            $debug && print "Applying Regex $extra_regex gives ";
+            $debug && print "Applying Regex $extra_regex on $extra_value gives ";
             if ($extra_value=~/$extra_regex/) {
                # concatenate $1 through $5 together to allow more complex matches. Use || '' since most of the time they will be uninitialized
                $extra_value=$1 || '' . $2 || '' . $3 || '' . $4 || '' . $5 || '';
@@ -5766,9 +5513,9 @@ for (my $query_number=$last_wmi_data_index;$query_number<=$last_wmi_data_index;$
       if ($base_regex) {
          if (defined($base_replacement)) {
             $base_value=~s/$base_regex/$base_replacement/ig;
-            $debug && print "Applying Regex $base_regex and replacing with $base_replacement gives $base_value\n";
+            $debug && print "Applying Regex $base_regex on $base_value and replacing with $base_replacement gives $base_value\n";
          } else {
-            $debug && print "Applying Regex $base_regex gives ";
+            $debug && print "Applying Regex $base_regex on $base_value gives ";
             if ($base_value=~/$base_regex/) {
                # concatenate $1 through $5 together to allow more complex matches. Use || '' since most of the time they will be uninitialized
                $base_value=$1 || '' . $2 || '' . $3 || '' . $4 || '' . $5 || '';
@@ -5835,14 +5582,14 @@ sub process_event_clusions {
 # process event log check inclusions and exclusions from the ini file
 # return a new collected data array
 # pass in 
+# event inclusion mode
 # comma delimited list of section names to read inclusions and exclusions from 
 # reference to the collected data array - only a single query is passed in eg $collected_data[0]
 # reference to the wmi_ini object
 # 
 # we return a new array
-my ($sections,$wmidata,$wmi_ini)=@_;
+my ($event_mode,$sections,$wmidata,$wmi_ini)=@_;
 my $type=reftype $wmi_ini || '';
-
 my @new_data=();
 
 my @im_list=();
@@ -5875,23 +5622,29 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
 
    }
 
-   $debug && print "In/Exclusion List=" . Dumper(\@im_list,\@is_list,\@ii_list,\@ic_list,\@em_list,\@es_list,\@ei_list,\@ec_list);
+   $debug && print "Event Mode=$event_mode\nIn/Exclusion List=" . Dumper(\@im_list,\@is_list,\@ii_list,\@ic_list,\@em_list,\@es_list,\@ei_list,\@ec_list);
    
    # step through each record found
    foreach my $row (@{$wmidata}) {
       $debug && print "WMI Data Row:" . Dumper($row);
       # process all the inclusions first
       my $include_record=0;
+      $use_pro_library && prepare_event_counts();
       
       # see if there are any inclusions defined, if not the record is included
       if ($#im_list>=0 || $#is_list>=0 || $#ii_list>=0 || $#ic_list>=0) {
          foreach my $is (@is_list) {
             if (defined($is)) {
                $debug && print "Inclusion Checking SourceName for $is\n";
+               $use_pro_library && mark_event_inclusion($event_mode,'CRITERIA');
                if ($$row{'SourceName'}=~/$is/i) {
-                  $debug && print "Including\n";
-                  $include_record=1;
-                  last;
+                  if ($event_mode eq $event_modes{'ANY'}) {
+                     $debug && print "Including\n";
+                     $include_record=1;
+                     last;
+                  } elsif ($use_pro_library) {
+                     mark_event_inclusion($event_mode,'EVENT');
+                  }
                }
             }
          }
@@ -5902,10 +5655,15 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
             foreach my $im (@im_list) {
                if (defined($im)) {
                   $debug && print "Inclusion Checking Message for $im\n";
+                  $use_pro_library && mark_event_inclusion($event_mode,'CRITERIA');
                   if ($$row{'Message'}=~/$im/i) {
-                     $debug && print "Including\n";
-                     $include_record=1;
-                     last;
+                     if ($event_mode eq $event_modes{'ANY'}) {
+                        $debug && print "Including\n";
+                        $include_record=1;
+                        last;
+                     } elsif ($use_pro_library) {
+                        mark_event_inclusion($event_mode,'EVENT');
+                     }
                   }
                }
             }
@@ -5916,10 +5674,15 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
             foreach my $ii (@ii_list) {
                if (defined($ii)) {
                   $debug && print "Inclusion Checking EventIdentifier for $ii\n";
+                  $use_pro_library && mark_event_inclusion($event_mode,'CRITERIA');
                   if ($$row{'EventIdentifier'}=~/$ii/i) {
-                     $debug && print "Including\n";
-                     $include_record=1;
-                     last;
+                     if ($event_mode eq $event_modes{'ANY'}) {
+                        $debug && print "Including\n";
+                        $include_record=1;
+                        last;
+                     } elsif ($use_pro_library) {
+                         mark_event_inclusion($event_mode,'EVENT');
+                     }
                   }
                }
             }
@@ -5930,13 +5693,22 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
             foreach my $ic (@ic_list) {
                if (defined($ic)) {
                   $debug && print "Inclusion Checking EventCode for $ic\n";
+                  $use_pro_library && mark_event_inclusion($event_mode,'CRITERIA');
                   if ($$row{'EventCode'}=~/$ic/i) {
-                     $debug && print "Including\n";
-                     $include_record=1;
-                     last;
+                     if ($event_mode eq $event_modes{'ANY'}) {
+                        $debug && print "Including\n";
+                        $include_record=1;
+                        last;
+                     } elsif ($use_pro_library) {
+                         mark_event_inclusion($event_mode,'EVENT');
+                     }
                   }
                }
             }
+         }
+         
+         if ($use_pro_library) {
+            $include_record=calculate_event_inclusion($event_mode,$include_record);
          }
 
       } else {
@@ -6323,6 +6095,9 @@ foreach my $result (@{$values_array}) {
       }
       
       my $row_string=join($field_delimiter,@row_field_list);
+      # remove empty fields from the end - remove anything ending in the field delimiter
+      # use \Q and \E to quote the field delimiter since it can have regex special chars which screw up the regex
+      $row_string=~s/\Q$field_delimiter\E$//;
 
       if ($list_unique) {
          # record the ones we have seen before and count how many of them
@@ -6678,11 +6453,15 @@ my ($exit_code)=@_;
 
 $final_exit_code=$exit_code;
 
+# pro may modify the exit code
 $use_pro_library && finish_program_like_a_pro();
 
 if ($opt_use_cached_wmic_response || $use_cached_wmic_responses) {
    print "WARNING - Using Cached WMIC Data. Your plugin results will be inaccurate.\n";
 }
+
+# print the plugin output, if any
+$plugin_output && print $plugin_output;
 
 $test_generate && print "EOT\nexitcode_$test_number=$final_exit_code\n";
 $test_run && print "exitcode_$test_number=$final_exit_code\n";

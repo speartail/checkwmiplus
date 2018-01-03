@@ -1,4 +1,4 @@
-check_wmi_plus v1.6
+check_wmi_plus v1.61
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -11,7 +11,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow]
  
  Help as a Manpage:  
  
@@ -60,6 +60,8 @@ COMMONLY USED OPTIONS
  
  -4 ARG4  argument number 4. Its meaning depends on the MODE/SUBMODE combination.
  
+ -5 ARG5  argument number 5. Its meaning depends on the MODE/SUBMODE combination.
+
  -w WARN  specify warning criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a warning status (unless a critical status is also triggered). See below for how to specify warning criteria.
 
  -c CRIT  specify critical criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a critical status. See below for how to specify warning criteria.
@@ -73,7 +75,7 @@ LESS COMMONLY USED OPTIONS
 
  --excludedata DATASPEC  specify data values that are to be excluded. See the section below on INCLUDING AND EXCLUDING WMI DATA
 
- --nodatamode  Controls how the plugin responds when no data is returned by the WMI query. Normally, the plugin returns an Unknown error. If you specify this option then you can use WARN/CRIT checking on the _ItemCount field. This is only useful for some checks eg checkfilesize where you might get no data back from the WMI query when the file is not found.
+ --nodatamode  Controls how the plugin responds when no data is returned by the WMI query. Normally, when no data is returned from the WMI query, the plugin returns an Unknown error. If you specify this option, then no data is not an error condition anymore and you can use WARN/CRIT checking on the _ItemCount field. This is only useful for some checks eg checkfilesize where you might get no data back from the WMI query when the file is not found, but getting no data back is not an error.
 
  --nodataexit NODATAEXIT  specify the plugin status result if the WMI Query returns no data. Ignored if --nodatamode is set. Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown. Only used for some checks. All checks from the ini file can use this.
  
@@ -122,6 +124,10 @@ LESS COMMONLY USED OPTIONS
  --forceiniopen  Force reading of the ini files. You may want to do this if you are doing a non-ini file check and you are using global variables defined in an ini file. Only use this if you really need it since it makes each invocation of the plugin a lot slower (unless you are doing an ini file check already).
  
  --forcetruncateoutput LEN  Restrict the length of the plugin output to LEN bytes. The default value is 8192.
+ 
+ --Mapexit MAPSPEC  Pro Version only. Change the exit code plugin would normally use based on MAPSPEC. MAPSPEC format is one of X:Y or X:Y:REGEX, where X is the original exit code and Y is the new exit code. If REGEX is specified then the exit code mapping is only done if the plugin output matches the case insensitive regular expression REGEX. Multiple --Mapexit parameters can be specified. Order is important as the first one that matches will be used.
+ 
+ --fieldshow  Show the list of fields available/used for a specific check. Run the check normally and add this option. The list of fields will be shown above the plugin output. This is useful when configuring checks. It shows all the fields available for the specific check. For example, use it to show which fields you can use for --includedata etc 
 
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc. Keeping State is used by default.
@@ -144,9 +150,11 @@ INI FILE SPECIFIED
 INCLUDING AND EXCLUDING WMI DATA
 The --includedata and --excludedata options modify the data returned from the WMI query to include/exclude only data that matches DATASPEC. DATASPEC is in the same format as warning/critical specifications (See Section WARNING AND CRITICAL SPECIFICATION).
 
-At the moment this is only enabled for checks from ini files and it does not apply to the built-in modes. All includes/excludes defined on the command line and the ini file are combined and then processed.
+At the moment this is largely enabled for checks from ini files and it typically does not apply to the built-in modes. All includes/excludes defined on the command line and the ini file are combined and then processed.
+PRO users can use this for the following inbuilt modes: checkdrivesize, checkgroup, checklogon, checknetwork, checkpage, checkprintjob, checkprocess, checkservice, checkshare, checksmart, checkstartupcommand, checkuseraccount, checkvolsize.
+PRO users can use regular expressions as as warning/critical specifications hence increasing the power of this option.
 
-Any fields that are returned by the WMI query can be used, not just the ones that are displayed. You might need to use the debug mode (-d) to see all the valid fields available.
+Any fields that are returned by the WMI query can be used, not just the ones that are displayed. Use the --fieldshow option to show the valid fields for a specific check. You might need to use the debug mode (-d) to see all the valid fields available.
 
 The include/exclude arguments can be specified multiple times on the command line. 
 
@@ -160,6 +168,10 @@ Examples using -m checkproc -s cpu:
 --inc IDProcess=@2000:3000 to include all process IDs that are inside the range of 2000 to 3000.
 
 --exc _AvgCPU=@0:5 to exclude all processes where the average CPU utilisation is inside the range of 0 to 5.
+
+Examples using -m checkdrivesize (PRO only):
+
+--excludedata DeviceID=~'F:|e:' to exclude drives matching F: or E:
 
 WARNING AND CRITICAL SPECIFICATION
 
@@ -191,7 +203,7 @@ The convention used for field names in this plugin is as follows:
    6. alert is raised if metric is outside start and end range (inclusive of endpoints)
    7. if range starts with "@", then alert if inside this range (inclusive of endpoints)
    8. The start and end values can use multipliers from the following list: 
-      g, p, k, e, t, m or the time-based multipliers mth, day, hr, yr, sec, wk, min.
+       or the time-based multipliers .
       The time-based multipliers are normally used where the data is in seconds.
       eg 1G for 1 x 10^9 or 2.5k for 2500
       eg 1wk for 1 week, 3.5day for 3.5 days etc
@@ -202,15 +214,15 @@ The convention used for field names in this plugin is as follows:
  10:                     < 10, (outside {10 .. infinity})
  ~:10                    > 10, (outside the range of {-infinity .. 10})
  10:20                   < 10 or > 20, (outside the range of {10 .. 20})
- @10:20                  = 10 and = 20, (inside the range of {10 .. 20})
- 10                      < 0 or > 10, (outside the range of {0 .. 10})
+ @10:20                 >=10 and <=20, (inside the range of {10 .. 20})
  10G                     < 0 or > 10G, (outside the range of {0 .. 10G})
 
  EXAMPLES WITH FIELDS
  for MODE=checkdrivesize:
- _UsedGB=10              Check if the _UsedGB field is < 0 or > 10, (outside the range of {0 .. 10}) 
- 10                      Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}), since _Used% is the default
- _Used%=10               Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}) 
+ _UsedGB=10              Check if the _UsedGB field is < 0 or > 10,  (outside the range of {0 .. 10}) 
+ _Used=10G               Check if the _Used field is   < 0 or > 10G, (outside the range of {0 .. 10G}) 
+ 10                      Check if the _Used% field is  < 0 or > 10,  (outside the range of {0 .. 10}), no field specified since _Used% is the default
+ _Used%=10               Check if the _Used% field is  < 0 or > 10,  (outside the range of {0 .. 10}) 
 
  EXAMPLES WITH MULITPLE SPECIFICATIONS
  for MODE=checkdrivesize:
@@ -260,6 +272,7 @@ checkcpuq
    optimal value for you.
    
 checkdrivesize  
+   By default, drives in a non-OK state will be shown first.
    Also see checkvolsize
    ARG1  drive letter or volume name of the disk to check. If omitted a list of valid drives will be shown. If set to . all drives will be included.
       To include multiple drives separate them with a |. This uses a regular expression so take care to
@@ -269,9 +282,20 @@ checkdrivesize
       If you set this you can also check warn/crit against the overall disk space.
       To show only the overall disk, set ARG3 to 1 and set ARG1 to 1 (actually to any non-existant disk)
       Eg -o 1 -3 1
+   ARG4  This is a 2 character string which controls how the drive information is displayed. 
+   
+       Format is XY where
+         X=0, display not-ok drives first
+         X=1, display drives in the order the the WMI query returns them in
+         X=2, only display not-ok drives
+         X=3, If all drives are OK, same display as X=1. If there are any not OK drives, same display as X=2
+         Y=0, show results on a single line
+         Y=1, show results as multi-line with the first line being a high level summary of status 
 
    WARN/CRIT  can be used as described below.
-      Valid Warning/Critical Fields are: _Used% (Default), _UsedGB, _Free%, _FreeGB.
+      Valid Warning/Critical Fields are: _Used% (Default), _UsedSpace, _UsedGB, _Free%, FreeSpace_FreeGB.
+      
+   PRO Users can use --includedata and --excludedata for this mode. Note that, if using ARG3, and these options, the system totals may be misleading.
 
 checkeventlog  
    ARG1  Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer". You may also use a comma delimited list to specify multiple event logs. You can also specify event log names using the wildcard character % eg system,app%,%shell%. Default is system
@@ -288,6 +312,7 @@ checkeventlog
    ARG4  Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
       ie use the eventdefault section settings from the ini file. The ini file contains regular expression based inclusion
       and exclusion rules to accurately define the events you want to or don't want to see. Event inclusions and exlusions rules are ANDed together. See the events.ini file for details.
+   ARG5  The Include/Exclude mode. Defaults to 'any', which includes event log records that match any of the match criteria. PRO users can additionally specify 'includeall' which will only include event log records that match all the match criteria.
    WARN/CRIT   can be used as described below.
       The only valid Warning/Critical Field is _ItemCount, so you don't even need to specify it!.
 
@@ -318,14 +343,14 @@ checkeventlog
 
 checkfileage  
    ARG1  full path to the file. Use '/' (forward slash) instead of '\\' (backslash).
-   ARG2  set this to one of the time multipliers (mth, day, hr, yr, sec, wk, min)
+   ARG2  set this to one of the time multipliers ()
       This becomes the display unit and the unit used in the performance data. Default is hr.
       -z can not be used for this mode.
    WARN/CRIT  can be used as described below.
       The only valid Warning/Critical Field is _FileAge, so you don't even need to specify it!
       
       The warning/critical values should be specified in seconds. However you can use the time multipliers
-      (mth, day, hr, yr, sec, wk, min) to make it easier to use
+      () to make it easier to use
       
       eg instead of putting -w 3600 you can use -w 1hr
       
@@ -352,6 +377,34 @@ checkfoldersize
    If you specify --nodatamode then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
       This allows you to control how the plugin responds to non-existant files.
       Valid Warning/Critical Fields are: _FolderSize (Default), _ItemCount.
+      -
+checkgroup
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _ItemCount (Default), _ItemChange, LocalAccount, Status
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching groups are found.
+
+   PRO Users can use --includedata and --excludedata for this mode. Eg --incl LocalAccount=~true.
+   The groups are defined as changed if the fields shown in the plugin output change between runs.
+   Check for changes by using -w _ItemChange=~true.
+
+checkgroupuser
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _ItemCount (Default), _ItemChange
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching group users are found.
+
+   PRO Users can use --includedata and --excludedata for this mode. Eg --incl _GroupName=~admin.
+   The group users are defined as changed if the fields shown in the plugin output change between runs.
+   Check for changes by using -w _ItemChange=~true.
+
+checklogon (PRO only)
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _ItemCount (Default), _ItemChange
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching logons are found.
+
+   PRO Users can use --includedata and --excludedata for this mode. Eg --incl _LogonTypeDescription=~interactive.
+   Check for changes by using -w _ItemChange=~true.
+   _LogonTypeDescriptions are available from https://msdn.microsoft.com/en-us/library/windows/desktop/aa394189%28v=vs.85%29.aspx. Commonly used values are Interactive, System and Network
+   Note:  This check uses 2 WMI queries per run to collect all the required information. It is possible that logged on users change between these 2 queries eg the user logging in to perform the WMI query and so you may end up with some incomplete information. If you want to exclude these records, include only data with has a LogonId by adding --incl LogonId=~.
 
 checkmem  
    This mode checks the amount of physical RAM in the system.
@@ -373,6 +426,8 @@ checknetwork
 
    Note:  
       This check does up to 3 WMI queries so it may be slow. You might need to use the -t option. Since 2 of the WMI queries are relatively static, their results are cached and you can set the refresh period for this data using --joinexpiry.
+      
+   PRO Users can use --includedata and --excludedata for this mode.
    
 checkpage  
    This mode checks the amount of page file usage.
@@ -397,6 +452,17 @@ checkpage
    Note:  
       This check does up to 2 WMI queries (if -a auto or ARG4 is used) so it may be slow. You might need to use the -t option. Since 1 of the WMI queries (for -a auto) is relatively static, its results are cached and you can set the refresh period for this data using --joinexpiry.
 
+   PRO Users can use --includedata and --excludedata for this mode.
+
+checkprintjob (PRO only)
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _ItemCount (Default), _ItemChange, Color, Status, TotalPages, Owner, Document, DataType
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching jobs are found.
+
+   PRO Users can use --includedata and --excludedata for this mode. Eg --incl _PrintJob=~laser.
+   The print queue is defined as changed if the fields shown in the plugin output change between runs.
+   Check for changes by using -w _ItemChange=~true.
+
 checkprocess  
    SUBMODE  Set this to Name, ExecutablePath, or Commandline to determine if ARG1 and ARG3 matches against just the
       process name (Default), the full path of the executable file, or the complete command line used to run the process.
@@ -416,6 +482,18 @@ checkprocess
    WARN/CRIT  can be used as described below.
       Valid Warning/Critical Fields are: _ItemCount (Default), _NumExcluded
    
+   PRO Users can use --includedata and --excludedata for this mode.
+
+checkquota (PRO only)
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _ItemCount (Default), _ItemChange, DiskSpaceUsed, Limit, Status, WarningLimit
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching quotas are found.
+
+   PRO Users can use --includedata and --excludedata for this mode. Eg --incl _User=~bob --incl _StatusDescription=~exceeded
+   The quotas are defined as changed if the fields shown in the plugin output change between runs.
+   Check for changes by using -w _ItemChange=~true.
+   Note:  This check can take a long time to collect the data. You may need to increase the timeout.
+
 checkservice  
    ARG1  A regular expression that matches against the short or long service name that can be seen in the properties of the
       service in Windows. The matching services are included in the resulting list. Use . alone to include all services.
@@ -426,11 +504,21 @@ checkservice
    ARG3  Optionally used to specify what type of services to display under which conditions. If not specified, all services are shown in all conditions. This is a comma delimited list of specifications in the following format: WHEN=WHAT, where WHEN is one of ok,warning,critical,unknown and WHAT is one of all,ok,bad,none. Examples: "ok=none,warning=bad,critical=bad" or "warning=all,critical=none". So to show only the "bad" services when a warning is given use "warning=bad".
    ARG4  Used to specify which type of services to display based on the StartMode. Only services with a StartMode matching this regular expression will be included. Examples: To include only manually started services use "-4 manual". To include all automatic and manual services use "-4 auto|man"
       This list is optional and applied before the exclusion list.
-   WARN/CRIT  can be used as described below. for example to show
+   WARN/CRIT  can be used as described below.
       Valid Warning/Critical Fields are: _NumBad (Default), _NumGood, _NumExcluded, _Total
 
    Note:  
       A "Good" service is one that is Started, its State is Running and its Status is OK. Anything else is considered "Bad". If you don't want certain services included in this count then you will need to exclude them with -o ARG2
+
+   PRO Users can use --includedata and --excludedata for this mode.
+
+checkshare (PRO only)
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _ItemCount (Default), _ItemChange
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching users are found.
+
+   PRO Users can use --includedata and --excludedata for this mode. Eg --incl Name=~C.
+   Check for changes by using -w _ItemChange=~true.
 
 checksmart  
    Check the SMART status of all hard drives on the system. Will only work for physical drives (ie not on disks in a virtual machine!). Probably will not work for disk array drives as they are not normally presented to the system as disks. Reports if any drives are failing the SMART checks which signals
@@ -457,6 +545,17 @@ checksmart
       
       -m checksmart -a 194,9
 
+   PRO Users can use --includedata and --excludedata for this mode.
+
+checkstartupcommand (PRO only)
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _ItemCount (Default), _ItemChange, Command, Description, Name, User
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching commands are found.
+
+   PRO Users can use --includedata and --excludedata for this mode. Eg --incl _Name=~onedrive.
+   The startup commands are defined as changed if the fields shown in the plugin output change between runs.
+   Check for changes by using -w _ItemChange=~true.
+
 checktime  
    This mode compares the time on the Windows machine to the time on the server running Check WMI Plus. It uses UTC time. use the warning/critical criteria to trigger if the time difference exceeds a threshold that you define.
    WARN/CRIT  can be used as described below.
@@ -470,7 +569,7 @@ checkuptime
    WARN/CRIT  can be used as described below.
       The only valid Warning/Critical Field is _UptimeSec, so you don't even need to specify it!
       
-      The warning/critical values should be specified in seconds. However you can use the time multipliers (mth, day, hr, yr, sec, wk, min) to make it easier to use.
+      The warning/critical values should be specified in seconds. However you can use the time multipliers () to make it easier to use.
       
       eg instead of putting -w 1800 you can use -w 30min
       
@@ -478,8 +577,18 @@ checkuptime
       
       Typically you would specify something like -w 20min: -c 10min: (to if less than 20 min and critical if less than 10 min)
 
+checkuseraccount
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _ItemCount (Default), _ItemChange, Disabled, LocalAccount, Lockout, PasswordChangeable, PasswordExpires, PasswordRequired, SIDType, Status
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching users are found.
+
+   PRO Users can use --includedata and --excludedata for this mode. Eg --excl Disabled=~true.
+   The user accounts are defined as changed if the fields shown in the plugin output change between runs.
+   Check for changes by using -w _ItemChange=~true.
+
 checkvolsize  
    This can be used to monitor volumes mounted as junction points (ie no drive letters) as well as normal logical volumes.
+   By default, drives in a non-OK state will be shown first.
    Also see checkdrivesize
    ARG1  drive letter or volume name or volume label of the volume to check. If omitted a list of valid drives will be shown. If set to . all drives will be included.
       To include multiple volumes separate them with a |. This uses a regular expression so take care to
@@ -488,8 +597,20 @@ checkvolsize
    ARG3  Set this to 1 to include information about the sum of all volume space on the entire system.
       If you set this you can also check warn/crit against the overall volume space.
       To show only the overall volume, set ARG3 to 1 and set ARG1 to 1 (actually to any non-existant volume)
+   ARG4  This is a 2 character string which controls how the drive information is displayed. 
+   
+       Format is XY where
+         X=0, display not-ok drives first
+         X=1, display drives in the order the the WMI query returns them in
+         X=2, only display not-ok drives
+         X=3, If all drives are OK, same display as X=1. If there are any not OK drives, same display as X=2
+         Y=0, show results on a single line
+         Y=1, show results as multi-line with the first line being a high level summary of status 
+
    WARN/CRIT  can be used as described below.
-      Valid Warning/Critical Fields are: _Used% (Default), _UsedGB, _Free%, _FreeGB.
+      Valid Warning/Critical Fields are: _Used% (Default), _UsedSpace, _UsedGB, _Free%, FreeSpace_FreeGB.
+
+   PRO Users can use --includedata and --excludedata for this mode. Note that, if using ARG3, and these options, the system totals may be misleading.
 
 checkwsusserver  
    If there are any WSUS related errors in the event log in the last 24 hours a CRITICAL state is returned.
@@ -1084,25 +1205,6 @@ INI FILE HELP SUMMARY
    curent session names. Session names are then used in other checkts checks.
 
    WARN/CRIT  Not used for this MODE.
-
- checkusers, count (-m checkusers -s count)  
-   Check the count of users. You can specify the attributes of the users using ARG1.
-   ARG1  You must specify everything that follows the "where" clause in the WMI query. You can use any combination of valid WMI fields for the Win32_UserAccount class. Use ' ' to quote strings. 
-   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching users are found.
-   Valid WMI Fields for Server 2003 R2/2008 R2  AccountType, Caption, Description, Disabled, Domain, FullName, InstallDate, LocalAccount, Lockout, Name, PasswordChangeable, PasswordExpires, PasswordRequired, SID, SIDType, Status
-   ARG1 Example  List all users: -a "status like '%'"
-   ARG1 Example  Show users where the Status is OK: -a "status='OK'"
-   ARG1 Example  Show usernames that contains the string "EX": -a "name like '%EX%'"
-   ARG1 Example  Show usernames that start with the string "Admin": -a "name like 'Admin%'"
-   ARG1 Example  Show usernames that end with the string "test": -a "name like '%test'"
-   ARG1 Example  Show users whose full name contains the String "Exchange": -a "fullname like '%Exchange%'"
-   ARG1 Example  Show users that belong to the Domain called "TEST": -a "Domain='TEST'"
-   ARG1 Example  Show users where a password is not required: -a "PasswordRequired!='True'"
-   ARG1 Example  Show users that belong to the Domain called "TEST" and that where a password is not required: -a "PasswordRequired!='True' AND Domain='TEST'"
-   ARG1 Example  Show users that do not belong to the Domain called "TEST": -a "Domain!='TEST'"
-   ARG1 Example  Show users that have local accounts: -a "LocalAccount='True'"
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
 
  info, cpu (-m info -s cpu)  
    This check shows basic cpu information.
