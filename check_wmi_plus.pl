@@ -44,14 +44,14 @@ use lib "/usr/lib/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.56;
+our $VERSION=1.57;
 
 # which version of PRO (if used does this require)
-our $requires_PRO_VERSION=1.25;
+our $requires_PRO_VERSION=1.26;
 
 use strict;
 use Getopt::Long;
-use Scalar::Util qw(looks_like_number);
+use Scalar::Util qw(looks_like_number reftype);
 use Number::Format qw(:subs);
 use Data::Dumper;
 use Storable;
@@ -219,6 +219,10 @@ our $force_wmic_command=0;
 # all your check response will be inaccurate
 our $use_cached_wmic_responses=0;
 
+# force reading of the ini files - you may want to do this if you are doing a non-ini file check and you are using variables defined in an ini file
+# only use this if you really needed it since it makes each invocation of the plugin a lot slower
+our $force_ini_open=0;
+
 # PRO Only:
 # collect various usage info and store it in $usage_db_file for later analysis
 # also available by using the --icollectusage command line parameter
@@ -325,7 +329,7 @@ my %smartattributes=(
 );
 
 # this hash contains lists of the fields that can be used in the warning/critical specs for specific modes
-my %valid_test_fields = (
+our %valid_test_fields = (
    # key name is the name of the mode
    # value is an array of fields names to check against
    # the first one in the list is the default if none is specified in a warn/crit specification
@@ -458,6 +462,15 @@ our $current_usage_db_suffix_file="$wmi_data_dir/check_wmi_plus.usagedb.suffix";
 our $i_will_show_usage_stats=0;
 our $i_will_collect_usage_info=0;
 
+# list of static ini variables
+our %ini_static_variables=();
+
+# disable the use of static variables
+my $opt_disable_static_variables=0;
+
+# flag to tell us if we have opened the ini files already
+my $ini_files_already_opened=0;
+
 #==============================================================================
 #================================== PARAMETERS ================================
 #==============================================================================
@@ -487,6 +500,7 @@ GetOptions(
    "debug+"                   => \$debug,
    "excludedata=s@"           => \@opt_exclude_data,
    "extrawmicargs=s@"         => \@opt_extra_wmic_args,
+   "forceiniopen"             => \$force_ini_open,
    "forcewmiccommand"         => \$force_wmic_command,
    "help"                     => \$opt_help,
    "Hostname=s"               => \$the_arguments{'_host'},
@@ -529,6 +543,7 @@ GetOptions(
    "timeout=i"                => \$the_arguments{'_timeout'},
    "username=s"               => \$opt_username,
    "value=s"                  => \$opt_value,
+   "variablesdisabled"        => \$opt_disable_static_variables,
    "version"                  => \$opt_Version,
    "warning=s@"               => \$opt_warn,
    "ydelay=s"                 => \$the_arguments{'_delay'},
@@ -751,6 +766,9 @@ if ($opt_username=~/^(.*?)\@(.*?)$/) {
 # take a copy of the original arguments
 %the_original_arguments=%the_arguments; # not really used at the moment
 
+# object for holding the ini file content
+my $wmi_ini=();
+
 #==============================================================================
 #===================================== MAIN ===================================
 #==============================================================================
@@ -770,17 +788,21 @@ $use_pro_library && endtimer('Preparation');
 $the_arguments{'_mode'}=$opt_mode;
 $the_arguments{'_submode'}=$opt_submode;
 
+if ($force_ini_open) {
+   $wmi_ini=open_ini_file($wmi_ini);
+}
+
 # now run the appropriate sub for the check
 if (defined($mode_list{$opt_mode})) {
    # have to set a reference to the subroutine since strict ref is set
    my $subref=\&$opt_mode;
    &$subref('');
 } else {
-   if ($wmi_ini_file || $wmi_ini_dir) {
+   if ($wmi_ini_file || $wmi_ini_dir || $force_ini_open) {
       # maybe the mode is defined in the ini file
       # read the ini file and check
       $use_pro_library && starttimer('Read INI Files');
-      my $wmi_ini=open_ini_file();
+      $wmi_ini=open_ini_file($wmi_ini);
 
       my $ini_section='';
       if (defined($wmi_ini)) {
@@ -876,73 +898,91 @@ return $versions_ok;
 }
 #-------------------------------------------------------------------------
 sub open_ini_file {
-my $ini_file;
+# pass in 
+# the object that may already hold the ini file content
+my ($wmi_ini)=@_;
 
-my $ini_is_new=0;
-
-if ($use_pro_library && $use_compiled_ini_files) {
-   # when using pro we can compile the ini files so that we don't have to open and parse them all everytime we run
-   $debug && print "Trying to use Pro compiled ini files ....\n";
-   if (-s $compiled_ini_file) {
-      $debug && print "Using Pro compiled ini file\n";
-      $ini_file=use_compiled_ini_files();
-   } else {
-      $debug && print "No existing Pro compiled ini file\n";
-   }
-}
-
-if (!$ini_file) {
-
-   $use_pro_library && starttimer('Open INI Files');
-   $debug && print "Opening Ini Files ...\n";
+if ($ini_files_already_opened) {
+   # already open so just returned the passed in object
+   $debug && print "Not reopening INI files since they have already been opened\n";
+   return $wmi_ini;
+} else {
+   # ini files not open so open them
+   my $ini_file;
    
-   if ($wmi_ini_file) {
-      # firstly open the ini file configured 
-      $debug && print "   opening first ini file: $wmi_ini_file\n";
-      $ini_file=new Config::IniFiles( -file=>$wmi_ini_file, -allowcontinue=>1 );
-      $ini_is_new=1;
-   }
+   my $ini_is_new=0;
    
-   if ($wmi_ini_dir) {
-      # see what ini files are available in the dir
-      my @ini_list=get_files_from_dir($wmi_ini_dir,'\.ini$');
-      my $ini_count=$#ini_list+1;
-      $debug && print "   checking ini dir $wmi_ini_dir, found $ini_count file(s)\n";
-      foreach my $ini (@ini_list) {
-         # open this ini file and it will be merged with and override any clashing settings in previously opened ini files
-         my $next_ini_file;
-         if (defined($ini_file)) {
-            # there is a previous ini file so we need to -import it
-            $debug && print "   opening ini file: $ini\n";
-            $next_ini_file=new Config::IniFiles( -file=>"$wmi_ini_dir/$ini", -allowcontinue=>1, -import=>$ini_file );
-         } else {
-            # no previous ini file so do not use the -import
-            $debug && print "   opening first ini file: $ini\n";
-            $next_ini_file=new Config::IniFiles( -file=>"$wmi_ini_dir/$ini", -allowcontinue=>1);
-         }
-         
-         if (!defined($next_ini_file)) {
-            # got an error parsing the ini file
-            print "There is a problem reading the ini file: $ini. The error(s) are:\n" . join("\n",@Config::IniFiles::errors);
-            finish_program($ERRORS{'UNKNOWN'});
-         }
-         
-         $ini_file=$next_ini_file;
-         $ini_is_new=1;
+   if ($use_pro_library && $use_compiled_ini_files) {
+      # when using pro we can compile the ini files so that we don't have to open and parse them all everytime we run
+      $debug && print "Trying to use Pro compiled ini files ....\n";
+      if (-s $compiled_ini_file) {
+         $debug && print "Using Pro compiled ini file\n";
+         $ini_file=use_compiled_ini_files();
+      } else {
+         $debug && print "No existing Pro compiled ini file\n";
       }
    }
-   $use_pro_library && endtimer('Open INI Files');
+   
+   if (!$ini_file) {
+   
+      $use_pro_library && starttimer('Open INI Files');
+      $debug && print "Opening Ini Files ...\n";
+      
+      if ($wmi_ini_file) {
+         # firstly open the ini file configured 
+         $debug && print "   opening first ini file: $wmi_ini_file\n";
+         $ini_file=new Config::IniFiles( -file=>$wmi_ini_file, -allowcontinue=>1 );
+         $ini_is_new=1;
+      }
+      
+      if ($wmi_ini_dir) {
+         # see what ini files are available in the dir
+         my @ini_list=get_files_from_dir($wmi_ini_dir,'\.ini$');
+         my $ini_count=$#ini_list+1;
+         $debug && print "   checking ini dir $wmi_ini_dir, found $ini_count file(s)\n";
+         foreach my $ini (@ini_list) {
+            # open this ini file and it will be merged with and override any clashing settings in previously opened ini files
+            my $next_ini_file;
+            if (defined($ini_file)) {
+               # there is a previous ini file so we need to -import it
+               $debug && print "   opening ini file: $ini\n";
+               $next_ini_file=new Config::IniFiles( -file=>"$wmi_ini_dir/$ini", -allowcontinue=>1, -import=>$ini_file );
+            } else {
+               # no previous ini file so do not use the -import
+               $debug && print "   opening first ini file: $ini\n";
+               $next_ini_file=new Config::IniFiles( -file=>"$wmi_ini_dir/$ini", -allowcontinue=>1);
+            }
+            
+            if (!defined($next_ini_file)) {
+               # got an error parsing the ini file
+               print "There is a problem reading the ini file: $ini. The error(s) are:\n" . join("\n",@Config::IniFiles::errors);
+               finish_program($ERRORS{'UNKNOWN'});
+            }
+            
+            $ini_file=$next_ini_file;
+            $ini_is_new=1;
+         }
+      }
+      $use_pro_library && endtimer('Open INI Files');
+   }
+   
+   if ($ini_is_new && $use_pro_library && $use_compiled_ini_files) {
+      # we've just read the ini files and we are using the pro library so we can compile them
+      $debug && print "Trying to use Pro to compile ini files ....\n";
+      compile_ini_files($ini_file);
+   }
+   
+   # check for variable defintions and load them to an array if found
+   my @tmp_array=$ini_file->val('variables','static','');
+   $use_pro_library && load_static_variables_from_array(\@tmp_array);
+   $debug && print "Global Static Ini Variables: " . Dumper(\%ini_static_variables);
+   
+   $ini_files_already_opened=1;
+   return $ini_file;
 }
-
-if ($ini_is_new && $use_pro_library && $use_compiled_ini_files) {
-   # we've just read the ini files and we are using the pro library so we can compile them
-   $debug && print "Trying to use Pro to compile ini files ....\n";
-   compile_ini_files($ini_file);
-}
-
-return $ini_file;
 }
 #-------------------------------------------------------------------------
+
 sub show_warn_crit_field_info {
 # shows consistent information about warn/crit fields for help modes
 # pass in
@@ -1058,7 +1098,7 @@ sub show_ini_help_overview {
 my ($give_all_detail)=@_;
 
 # it might be open already but just open it again
-my $wmi_ini=open_ini_file();
+my $wmi_ini=open_ini_file($wmi_ini);
 # here we need to list out the modes available in the ini file - with some of the text from their inihelp= field
 my @ini_modes=$wmi_ini->Sections();
 $debug && print "Showing inihelp for the following modes/submodes - " . Dumper(\@ini_modes);
@@ -1154,7 +1194,7 @@ finish_program($ERRORS{'UNKNOWN'});
 sub short_usage {
 my ($no_exit)=@_;
 print <<EOT;
-Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow]
+Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen]
 EOT
 if (!$no_exit) {
    print "Help as a Manpage: --help\nHelp as Text: --itexthelp\n";
@@ -1221,7 +1261,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen]
  
  Help as a Manpage:  
  
@@ -1326,6 +1366,10 @@ LESS COMMONLY USED OPTIONS
  --logsuffix SUFFIX  Pro Version only. Switch to the Usage DB file using SUFFIX.
 
  --logshow  Pro Version only. Show current Usage DB file.
+ 
+ --variablesdisabled  Disable the use of static variables (from the ini files).
+ 
+ --forceiniopen  Force reading of the ini files. You may want to do this if you are doing a non-ini file check and you are using global variables defined in an ini file. Only use this if you really need it since it makes each invocation of the plugin a lot slower (unless you are doing an ini file check already).
 
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc. Keeping State is used by default.
@@ -1365,7 +1409,10 @@ WARNING AND CRITICAL SPECIFICATION
 
 If warning or critical specifications are not provided then no checking is done and the check simply returns the value and any related performance data. If they are specified then they should be formatted as shown below.
 
-A range is defined as a start and end point (inclusive) on a numeric scale (possibly negative or positive infinity). The theory is that the plugin will do some sort of check which returns back a numerical value, or metric, which is then compared to the warning and critical thresholds. 
+Warning and Critical criteria can be specified as a RANGE or as a regular expression (Pro version only).
+
+ RANGES
+A RANGE is defined as a start and end point (inclusive) on a numeric scale (possibly negative or positive infinity). The theory is that the plugin will do some sort of check which returns back a numerical value, or metric, which is then compared to the warning and critical thresholds. 
 
 Multiple warning or critical specifications can be specified. This allows for quite complex range checking and/or checking against multiple FIELDS (see below) at one time. The warning/critical is triggered if ANY of the warning/critical specifications are triggered.
 
@@ -1420,6 +1467,17 @@ The convention used for field names in this plugin is as follows:
  This will generate a critical if 
     - the Used GB on the drive is more than 20 or 
     - the used % of the drive is more than 25%
+
+ REGULAR EXPRESSIONS
+This is the generalised format for a regular expression (Pro version only):
+
+FIELD=~REGEX  (for testing if the value of the FIELD matches the REGEX)
+or
+FIELD=!~REGEX  (for testing if the value of the FIELD does not match the REGEX)
+
+Note that as for the definition of RANGES (see section above for more details)
+   - the same naming conventions for FIELD names apply.
+   - specification of the FIELD is optional (in which case the format is ~REGEX or !~REGEX) and the default FIELD is dependent on the MODE.
 
 BUILTIN MODES
  The following modes are coded directly into the plugin itself and do not require any ini files to function.
@@ -2542,6 +2600,9 @@ foreach my $field (@{$display_fields}) {
       $this_unit=$1;
    }
    
+   # apply static variable substituions if any on the values (this is a reverse subtitute to turn a value into a name)
+   $use_pro_library && substitute_static_variables(1,\$this_value,$this_real_field_name);
+   
    $debug && print "$field ----> $this_start_bracket$this_display_field_name$this_sep$this_value$this_unit$this_end_bracket$this_delimiter\n";
    $display_string.="$this_start_bracket$this_display_field_name$this_sep$this_value$this_unit$this_end_bracket$this_delimiter";
 }
@@ -3282,11 +3343,13 @@ if ($data_errors) {
       print " We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of services. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041004/i) { 
       print " We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of processes. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/0x8004100e/i) { 
-      # this error message looks like
-      # ERROR: Login to remote object.
-      # NTSTATUS: NT code 0x8004100e - NT code 0x8004100e
-      print " The target host ($the_arguments{_host}) might not have the required WMI namespace. This can happen if you are trying to run a check that is only supported on newer versions of Windows eg checkpower only works on Server 2008 and above - the entire namespace required for that check is missing in older versions of Windows. Other causes include mistyping the WMI namesspace. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/0x80041045/i) { 
+      print " We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/0x80041045/i) { 
+      print " We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/0x800705af/i) { 
+      # error reported by toni.garcia@sistel.es
+      print "  This error appears to mean that the paging file is too small for this operation to complete, but if there sufficient paging space, you can reboot the $the_arguments{_host} as a workaround.\n. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_IO_TIMEOUT/i) {
       print " The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Is $the_arguments{_host} the correct hostname?. The host might even be up but just too busy. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_HOST_UNREACHABLE/i) {
@@ -3610,6 +3673,11 @@ if ($query) {
    
    # and optionally get some perf data fields
    my @perfdata_fields_list=$wmi_ini->val($ini_section,'perf');
+
+   # and optionally get some substitution fields
+   my @tmp_array=$wmi_ini->val($ini_section,'static');
+   $use_pro_library && load_static_variables_from_array(\@tmp_array);
+   $debug && print "All Static Ini Variables: " . Dumper(\%ini_static_variables);
 
    # need at least one pre-display or display field so that the plugin shows something!
    if ($#display_fields_list>=0 || $#pre_display_fields_list>=0) {
@@ -4281,6 +4349,15 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
       # at this point we can assume that we have all the data we need stored in @collected_data
       $$row{'_FreeMB'}=$$row{'AllocatedBaseSize'}-$$row{'CurrentUsage'};
       $$row{'_PeakFreeMB'}=$$row{'AllocatedBaseSize'}-$$row{'PeakUsage'};
+      
+      if ($$row{'_FreeMB'}<0) {
+         $$row{'_FreeMB'}=0
+      }
+      
+      if ($$row{'_PeakFreeMB'}<0) {
+         $$row{'_PeakFreeMB'}=0
+      }
+      
       $$row{'_Used%'}=sprintf("%.0f",$$row{'CurrentUsage'}/$$row{'AllocatedBaseSize'}*100);
       $$row{'_PeakUsed%'}=sprintf("%.0f",$$row{'PeakUsage'}/$$row{'AllocatedBaseSize'}*100);
       $$row{'_Free%'}=sprintf("%.0f",$$row{'_FreeMB'}/$$row{'AllocatedBaseSize'}*100);
@@ -5212,9 +5289,17 @@ my %severity_level_descriptions=(
    5  => "Security Audit Failure",
 );   
 
+my $wmi_ini;
+
 # set default values if not specified
 
-# name of log
+# -------------- $the_arguments{'_arg4'} is undef if not used, if this is the case then set it to our default ini section
+if (!defined($the_arguments{'_arg4'})) {
+   $the_arguments{'_arg4'}='eventdefault';
+}
+
+
+# -------------- name of log
 if (!$the_arguments{'_arg1'}) {
    $the_arguments{'_arg1'}='System';
 }
@@ -5235,9 +5320,18 @@ foreach my $logfile (@logfile_list) {
 # remove the last " OR " as it will not be needed
 $logfile_wherebit=~s/ OR $//;
 
-# severity level
+# -------------- severity level
+my $severity_level=$the_arguments{'_arg2'}; # doing this ensures we do not change the original value specified by substitutions
+# arg2 can also contain static variables that need substitution (PRO Users only)
+# you need to have loaded the ini files to get the substitution info
+if ($use_pro_library) {
+   # performance hit opening ini files if not using Pro version
+   $wmi_ini=load_event_static_variables($the_arguments{'_arg4'},$wmi_ini);
+   $use_pro_library && substitute_static_variables(0,\$severity_level,'');
+}
+
 # arg2 can be just a single number or a comma delimited list of numbers
-my @severity_levels=split(/,/,$the_arguments{'_arg2'});
+my @severity_levels=split(/,/,$severity_level);
 my $severity_wherebit='';
 my $severity_display='';
 # special cases for zero specified, 1 specified and more than 1 specified
@@ -5272,14 +5366,9 @@ if ($#severity_levels==-1) {
 $severity_display=~s/,$//;
 
 
-# number of past hours to check
+# -------------- number of past hours to check
 if (!$the_arguments{'_arg3'}) {
    $the_arguments{'_arg3'}=1;
-}
-
-# $the_arguments{'_arg4'} is undef if not used, if this is the case then set it to our default ini section
-if (!defined($the_arguments{'_arg4'})) {
-   $the_arguments{'_arg4'}='eventdefault';
 }
 
 # the date and time are stored in GMT in the event log so we need to query it based on that
@@ -5297,7 +5386,7 @@ my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
 
 check_for_data_errors($data_errors);
 
-my @newdata=process_event_clusions($the_arguments{'_arg4'},\@{$collected_data[$last_wmi_data_index]});
+my @newdata=process_event_clusions($the_arguments{'_arg4'},\@{$collected_data[$last_wmi_data_index]},$wmi_ini);
 # @newdata will totally replace the wmi data from the query, so we need to do it and then update _ItemCount
 $collected_data[$last_wmi_data_index]=\@newdata;
 
@@ -5305,10 +5394,11 @@ $collected_data[$last_wmi_data_index][0]{'_SeverityType'}=$severity_display;
 $collected_data[$last_wmi_data_index][0]{'_EventList'}='';
 
 if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}>0) {
-   $collected_data[$last_wmi_data_index][0]{'_EventList'}=" (List is on next line. Fields shown are - Logfile:TimeGenerated:SeverityLevel:EventId:EventCode:Type:SourceName:Message)\n" . list_collected_values_from_all_rows(\@collected_data,['Logfile','TimeGenerated','EventIdentifier','EventCode','Type','SourceName','Message'],"\n",':',0);;
+   $collected_data[$last_wmi_data_index][0]{'_EventList'}=" (List is on next line. Fields shown are - Logfile:TimeGenerated:EventId:EventCode:SeverityLevel:Type:SourceName:Message)\n" . list_collected_values_from_all_rows(\@collected_data,['Logfile','TimeGenerated','EventIdentifier','EventCode','Type','SourceName','Message'],"\n",':',0);;
 }
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
+
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
 
@@ -5528,15 +5618,41 @@ for (my $query_number=$last_wmi_data_index;$query_number<=$last_wmi_data_index;$
 return $data_errors,$join_last_wmi_data_index;
 }
 #-------------------------------------------------------------------------
+sub load_event_static_variables {
+# pass in 
+# comma delimited list of section names to read inclusions and exclusions from 
+# reference to the wmi_ini object
+my ($sections,$wmi_ini)=@_;
+
+# build up a list of inclusions and exclusions from the specified sections
+my @section_lists=split(/,/,$sections);
+
+if ($#section_lists>=0) {
+   # open the ini files
+   $wmi_ini=open_ini_file($wmi_ini);
+
+   foreach my $section (@section_lists) {
+      $debug && print "Including Event Section $section\n";
+      my @tmp_array=$wmi_ini->val($section,'static');
+      $use_pro_library && load_static_variables_from_array(\@tmp_array);
+   }
+   $debug && print "Added Event Static Ini Variables: " . Dumper(\%ini_static_variables);
+
+}
+return $wmi_ini;
+}
+#-------------------------------------------------------------------------
 sub process_event_clusions {
 # process event log check inclusions and exclusions from the ini file
 # return a new collected data array
 # pass in 
 # comma delimited list of section names to read inclusions and exclusions from 
 # reference to the collected data array - only a single query is passed in eg $collected_data[0]
+# reference to the wmi_ini object
 # 
 # we return a new array
-my ($sections,$wmidata)=@_;
+my ($sections,$wmidata,$wmi_ini)=@_;
+my $type=reftype $wmi_ini || '';
 
 my @new_data=();
 
@@ -5555,7 +5671,7 @@ my @section_lists=split(/,/,$sections);
 # only do something if there are some sections defined and some eventlog data
 if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
    # open the ini files
-   my $wmi_ini=open_ini_file();
+   $wmi_ini=open_ini_file($wmi_ini);
 
    foreach my $section (@section_lists) {
       $debug && print "Including Event Section $section\n";
@@ -5824,121 +5940,132 @@ if ($spec ne '') {
    my $format_type=0;
 
    # read the --help/usage page to see how to build a specification
-   # this first spec format might look like this
-   # FIELD=@1G:2G <-- we are specifically looking for a range here using a colon to separate to values
-   if ($spec=~/(.*?)=*(\@*)([0-9+\-\.\~]*)($multiplier_regex*):([0-9+\-\.\~]*)($multiplier_regex*)/i) {
-      $field_name=$1 || $valid_test_fields{$opt_mode}[0]; # apply the default field name if none specified
-      $at_specified=$2;
-      $min=$3;
-      $min_multiplier=$4;
-      $max=$5;
-      $max_multiplier=$6;
-      $format_type=1;
-      $debug && print "SPEC=$field_name,$2,$3,$4,$5,$6\n";
 
-   # this second spec might look like this
-   # FIELD=@1M <--- we are specifically looking for a single value
-   } elsif ($spec=~/(.*?)=*(\@*)([0-9+\-\.\~]+)($multiplier_regex*)/i) {
-      $field_name=$1 || $valid_test_fields{$opt_mode}[0]; # apply the default field name if none specified
-      $at_specified=$2;
-      $min=0;
-      $min_multiplier='';
-      $max=$3;
-      $max_multiplier=$4;
-      $format_type=2;
-      $debug && print "SPEC=$field_name,$2,$3,$4\n";
-   } else {
-      $debug && print "SPEC format for $spec, not recognised\n";
+   # if using the pro library then there are additional warn/crit specs available
+   # check for them here first
+   my $pro_sorted_it_out=0;
+   if ($use_pro_library) {
+      ($pro_sorted_it_out,$test_result,$perf_data_spec,$trigger_display,$field_name)=parse_limits_like_a_pro($spec,$test_value);
    }
 
-   # check to see if we got a valid specification
-   if ($format_type) {
-      $debug && print "Range Spec - FIELD=$field_name, AT=$at_specified MIN=$min MINMULTIPLIER=$min_multiplier MAX=$max MAXMULTIPLIER=$max_multiplier\n";
-      # there should always be a max value and may not be a min value
-      my $lower_bound_value='';
-      my $upper_bound_value='';
-      my $lower_bound_check='';
-      my $upper_bound_check='';
+   if (!$pro_sorted_it_out) {
 
-      # there is a possibility that the boundary is specified as ~
-      # this means negative infinity
-
-      # we have a range comparison and we check both bounds using < and >
-      if ($min eq '~') {
-         # since min is negative infinity then no point in doing this lower bound test as it will be always false
-         $lower_bound_check=0;
-         $lower_bound_value='~';
+      # this first spec format might look like this
+      # FIELD=@1G:2G <-- we are specifically looking for a range here using a colon to separate to values
+      if ($spec=~/(.*?)=*(\@*)([0-9+\-\.\~]*)($multiplier_regex*):([0-9+\-\.\~]*)($multiplier_regex*)/i) {
+         $field_name=$1 || $valid_test_fields{$opt_mode}[0]; # apply the default field name if none specified
+         $at_specified=$2;
+         $min=$3;
+         $min_multiplier=$4;
+         $max=$5;
+         $max_multiplier=$6;
+         $format_type=1;
+         $debug && print "SPEC=$field_name,$2,$3,$4,$5,$6\n";
+   
+      # this second spec might look like this
+      # FIELD=@1M <--- we are specifically looking for a single value
+      } elsif ($spec=~/(.*?)=*(\@*)([0-9+\-\.\~]+)($multiplier_regex*)/i) {
+         $field_name=$1 || $valid_test_fields{$opt_mode}[0]; # apply the default field name if none specified
+         $at_specified=$2;
+         $min=0;
+         $min_multiplier='';
+         $max=$3;
+         $max_multiplier=$4;
+         $format_type=2;
+         $debug && print "SPEC=$field_name,$2,$3,$4\n";
       } else {
-         # the value to test against is the field from the hash
-         $debug && print "Testing MIN: '$min' for Field $field_name which has value: $$test_value{$field_name}\n";
-         ($lower_bound_check,$lower_bound_value)=test_single_boundary('<','',$min,$min_multiplier,$$test_value{$field_name});
+         $debug && print "SPEC format for $spec, not recognised\n";
       }
-      
-      if ($max eq '') {
-         # since max is inifinity no point in checking since result will always be false
-         $upper_bound_check=0;
-         $upper_bound_value='';
-      } else {
-         # the value to test against is the field from the hash
-         $debug && print "Testing MAX: '$max' for Field $field_name which has value: $$test_value{$field_name}\n";
-         ($upper_bound_check,$upper_bound_value)=test_single_boundary('','',$max,$max_multiplier,$$test_value{$field_name});
-      }
-
-      # generate alert if either lower or upper triggered
-      if ($lower_bound_check) {
-         $test_result=1;
-         $trigger_display="$field_name<$min$min_multiplier";
-      }
-      if ($upper_bound_check) {
-         $test_result=1;
-         $trigger_display="$field_name>$max$max_multiplier";
-      }
-
-      if ($at_specified) {
-         # this just reverses the results
-         if ($test_result==1) {
-            $test_result=0;
-            $trigger_display='';
+   
+      # check to see if we got a valid specification
+      if ($format_type) {
+         $debug && print "Range Spec - FIELD=$field_name, AT=$at_specified MIN=$min MINMULTIPLIER=$min_multiplier MAX=$max MAXMULTIPLIER=$max_multiplier\n";
+         # there should always be a max value and may not be a min value
+         my $lower_bound_value='';
+         my $upper_bound_value='';
+         my $lower_bound_check='';
+         my $upper_bound_check='';
+   
+         # there is a possibility that the boundary is specified as ~
+         # this means negative infinity
+   
+         # we have a range comparison and we check both bounds using < and >
+         if ($min eq '~') {
+            # since min is negative infinity then no point in doing this lower bound test as it will be always false
+            $lower_bound_check=0;
+            $lower_bound_value='~';
          } else {
-            $test_result=1;
-            $trigger_display="$field_name in the range $min$min_multiplier:$max$max_multiplier";
+            # the value to test against is the field from the hash
+            $debug && print "Testing MIN: '$min' for Field $field_name which has value: $$test_value{$field_name}\n";
+            ($lower_bound_check,$lower_bound_value)=test_single_boundary('<','',$min,$min_multiplier,$$test_value{$field_name});
          }
-         $debug && print "@ specified so reverse the result\n";
-      }
-
-      # rewrite the specification taking into account any multipliers
-      # this is done so that we can parse consistent and recognisable values in the performance data
-      # performance data does not recognise our multiplier system so we have to pre-multiply it 
-      if ($format_type==1) {
-         if ($opt_z) {
-            #  provide full spec performance warn/crit data
-            $perf_data_spec="$at_specified$lower_bound_value:$upper_bound_value";
+         
+         if ($max eq '') {
+            # since max is inifinity no point in checking since result will always be false
+            $upper_bound_check=0;
+            $upper_bound_value='';
          } else {
-            # provide partial spec performance warn/crit data
-            # if only one number has been specified in the range spec then use that
-            # otherwise use the upper bound value
-            $perf_data_spec="$upper_bound_value";
-            if ($upper_bound_value=~/[0-9+\-\.]+/ && $lower_bound_value=~/[0-9+\-\.]+/) {
-               # stick with only upper bound data
-            } elsif ($lower_bound_value=~/[0-9+\-\.]+/) {
-               # no upper bound specified so use the lower bound
-               $perf_data_spec="$lower_bound_value";
+            # the value to test against is the field from the hash
+            $debug && print "Testing MAX: '$max' for Field $field_name which has value: $$test_value{$field_name}\n";
+            ($upper_bound_check,$upper_bound_value)=test_single_boundary('','',$max,$max_multiplier,$$test_value{$field_name});
+         }
+   
+         # generate alert if either lower or upper triggered
+         if ($lower_bound_check) {
+            $test_result=1;
+            $trigger_display="$field_name<$min$min_multiplier";
+         }
+         if ($upper_bound_check) {
+            $test_result=1;
+            $trigger_display="$field_name>$max$max_multiplier";
+         }
+   
+         if ($at_specified) {
+            # this just reverses the results
+            if ($test_result==1) {
+               $test_result=0;
+               $trigger_display='';
+            } else {
+               $test_result=1;
+               $trigger_display="$field_name in the range $min$min_multiplier:$max$max_multiplier";
+            }
+            $debug && print "@ specified so reverse the result\n";
+         }
+   
+         # rewrite the specification taking into account any multipliers
+         # this is done so that we can parse consistent and recognisable values in the performance data
+         # performance data does not recognise our multiplier system so we have to pre-multiply it 
+         if ($format_type==1) {
+            if ($opt_z) {
+               #  provide full spec performance warn/crit data
+               $perf_data_spec="$at_specified$lower_bound_value:$upper_bound_value";
+            } else {
+               # provide partial spec performance warn/crit data
+               # if only one number has been specified in the range spec then use that
+               # otherwise use the upper bound value
+               $perf_data_spec="$upper_bound_value";
+               if ($upper_bound_value=~/[0-9+\-\.]+/ && $lower_bound_value=~/[0-9+\-\.]+/) {
+                  # stick with only upper bound data
+               } elsif ($lower_bound_value=~/[0-9+\-\.]+/) {
+                  # no upper bound specified so use the lower bound
+                  $perf_data_spec="$lower_bound_value";
+               }
+            }
+         } else {
+            # for this format type the min was forced to zero, but it was not actually specified - so we only show an upper bound 
+            if ($opt_z) {
+               #  provide full spec performance warn/crit data
+               $perf_data_spec="$at_specified$upper_bound_value";
+            } else {
+               # provide partial spec performance warn/crit data
+               $perf_data_spec="$upper_bound_value";
             }
          }
+   
       } else {
-         # for this format type the min was forced to zero, but it was not actually specified - so we only show an upper bound 
-         if ($opt_z) {
-            #  provide full spec performance warn/crit data
-            $perf_data_spec="$at_specified$upper_bound_value";
-         } else {
-            # provide partial spec performance warn/crit data
-            $perf_data_spec="$upper_bound_value";
-         }
+         # seems to be some invalid spec format
+         $test_result=100;
       }
-
-   } else {
-      # seems to be some invalid spec format
-      $test_result=100;
    }
 }
 
@@ -5998,6 +6125,10 @@ foreach my $result (@{$values_array}) {
          if (exists($$row{$field})) { # it might not exist for example if you found no processes in your search
             # remove any CR or LF from the field as they stuff up the list - replace them with space
             $$row{$field}=~s/\n|\r/ /g;
+            
+            # perform reverse static variable substitutions on the fields
+            $use_pro_library && substitute_static_variables(1,\$$row{$field},$field);
+            
             push(@row_field_list,$$row{$field});
          }
       }
@@ -6063,7 +6194,7 @@ foreach my $spec (@{$spec_list}) {
    # store all the information about what was triggered
    push(@{$spec_result_list},$display);
    if ($result>1) {
-      print "Critical specification ($spec) not defined correctly\n";
+      print "Warning/Critical specification ($spec) not defined correctly\n";
    } elsif ($result==1) {
       $count++;
    }
@@ -6096,6 +6227,10 @@ my ($warn_spec_list,$critical_spec_list,$test_value,$warn_perf_specs_parsed,$cri
 # most of this stuff we pass in just gets passed off to test_multiple_limits
 # we call test_multiple_limits twice, once for warnings and once for criticals
 
+# translate any static variables
+$use_pro_library && substitute_static_variables(0,$warn_spec_list,'');
+$use_pro_library && substitute_static_variables(0,$critical_spec_list,'');
+
 $debug && print "Testing TEST VALUES " . Dumper($test_value);
 $debug && print "WARNING SPECS: " . Dumper($warn_spec_list);
 $debug && print "CRITICAL SPECS: " . Dumper($critical_spec_list);
@@ -6110,6 +6245,9 @@ $debug && print "------------ Warning Check ------------\n";
 my $warn_count=test_multiple_limits($warn_perf_specs_parsed,$test_value,$warn_spec_result_list,$warn_spec_list);
 
 $debug && print "------------ End Check ------------\n";
+
+$use_pro_library && substitute_static_variables(1,$warn_spec_result_list,'');
+$use_pro_library && substitute_static_variables(1,$critical_spec_result_list,'');
 
 # determine the result type, and load up some other values that can be used for display etc
 $$test_value{'_StatusType'}='';
@@ -6321,4 +6459,5 @@ $test_run && print "exitcode_$test_number=$final_exit_code\n";
 exit $final_exit_code;
 }
 #-------------------------------------------------------------------------
+
 

@@ -1,4 +1,4 @@
-check_wmi_plus v1.56
+check_wmi_plus v1.57
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -11,7 +11,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen]
  
  Help as a Manpage:  
  
@@ -116,6 +116,10 @@ LESS COMMONLY USED OPTIONS
  --logsuffix SUFFIX  Pro Version only. Switch to the Usage DB file using SUFFIX.
 
  --logshow  Pro Version only. Show current Usage DB file.
+ 
+ --variablesdisabled  Disable the use of static variables (from the ini files).
+ 
+ --forceiniopen  Force reading of the ini files. You may want to do this if you are doing a non-ini file check and you are using global variables defined in an ini file. Only use this if you really need it since it makes each invocation of the plugin a lot slower (unless you are doing an ini file check already).
 
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc. Keeping State is used by default.
@@ -159,7 +163,10 @@ WARNING AND CRITICAL SPECIFICATION
 
 If warning or critical specifications are not provided then no checking is done and the check simply returns the value and any related performance data. If they are specified then they should be formatted as shown below.
 
-A range is defined as a start and end point (inclusive) on a numeric scale (possibly negative or positive infinity). The theory is that the plugin will do some sort of check which returns back a numerical value, or metric, which is then compared to the warning and critical thresholds. 
+Warning and Critical criteria can be specified as a RANGE or as a regular expression (Pro version only).
+
+ RANGES
+A RANGE is defined as a start and end point (inclusive) on a numeric scale (possibly negative or positive infinity). The theory is that the plugin will do some sort of check which returns back a numerical value, or metric, which is then compared to the warning and critical thresholds. 
 
 Multiple warning or critical specifications can be specified. This allows for quite complex range checking and/or checking against multiple FIELDS (see below) at one time. The warning/critical is triggered if ANY of the warning/critical specifications are triggered.
 
@@ -214,6 +221,17 @@ The convention used for field names in this plugin is as follows:
  This will generate a critical if 
     - the Used GB on the drive is more than 20 or 
     - the used % of the drive is more than 25%
+
+ REGULAR EXPRESSIONS
+This is the generalised format for a regular expression (Pro version only):
+
+FIELD=~REGEX  (for testing if the value of the FIELD matches the REGEX)
+or
+FIELD=!~REGEX  (for testing if the value of the FIELD does not match the REGEX)
+
+Note that as for the definition of RANGES (see section above for more details)
+   - the same naming conventions for FIELD names apply.
+   - specification of the FIELD is optional (in which case the format is ~REGEX or !~REGEX) and the default FIELD is dependent on the MODE.
 
 BUILTIN MODES
  The following modes are coded directly into the plugin itself and do not require any ini files to function.
@@ -1158,11 +1176,10 @@ INI FILE HELP SUMMARY
 Plugin Elapsed with Usage Stats
    Plugin Elapsed
       Preparation
-         [Open INI Files: 0.276s]
-         [Compile INI Files: 0.100s]
-      Plugin Elapsed: 0.383s
+         [Open INI Files: 0.281s]
+      Plugin Elapsed: 0.289s
       Usage Logging
-         [Insert: 0.308s]
-      Usage Logging: 0.313s
-   Plugin Elapsed with Usage Stats: 0.697s
-CPU - User:0.512 (0.512+0) System:0.009 (0.009+0) MyTotal:0.521 ChildTotal:0 Total:0.521 Elapsed:0.383 WMIC_Calls:0 WMIC_Library_Calls:0
+         [Insert: 0.229s]
+      Usage Logging: 0.234s
+   Plugin Elapsed with Usage Stats: 0.523s
+CPU - User:0.504 (0.504+0) System:0.016 (0.016+0) MyTotal:0.52 ChildTotal:0 Total:0.52 Elapsed:0.289 WMIC_Calls:0 WMIC_Library_Calls:0
