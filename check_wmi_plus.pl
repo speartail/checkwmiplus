@@ -44,7 +44,7 @@ use lib "/usr/lib/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.58;
+our $VERSION=1.59;
 
 # which version of PRO (if used does this require)
 our $requires_PRO_VERSION=1.26;
@@ -142,6 +142,17 @@ my %good_module_versions=(
    'Config::IniFiles::VERSION',2.58,
    'Storable::VERSION',2.22
    );
+
+my %displaywhatwhen_mode_list=();
+
+# define some "string" constants
+my %string_constant=(
+   ok       => 0,
+   warning  => 1,
+   critical => 2,
+   unknown  => 3,
+);
+
 
 #==============================================================================
 #=================================== CONFIG ===================================
@@ -1539,7 +1550,7 @@ checkeventlog
    ARG3  Number of past hours to check for events. Default is 1
    ARG4  Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
       ie use the eventdefault section settings from the ini file. The ini file contains regular expression based inclusion
-      and exclusion rules to accurately define the events you want to or don't want to see. See the events.ini file for details.
+      and exclusion rules to accurately define the events you want to or don't want to see. Event inclusions and exlusions rules are ANDed together. See the events.ini file for details.
    WARN/CRIT   can be used as described below.
       $field_lists{'checkeventlog'}.
 
@@ -1674,12 +1685,15 @@ checkservice
       Use Auto to check that all automatically started services are OK.
    ARG2  A regular expression that matches against the short or long service name that can be seen in the properties of the
       service in Windows. The matching services are excluded in the resulting list.
-      This exclusion list is applied after the inclusion list.
-   WARN/CRIT  can be used as described below.
+      This exclusion list is optional and applied after the inclusion list.
+   ARG3  Optionally used to specify what type of services to display under which conditions. If not specified, all services are shown in all conditions. This is a comma delimited list of specifications in the following format: WHEN=WHAT, where WHEN is one of ok,warning,critical,unknown and WHAT is one of all,ok,bad,none. Examples: "ok=none,warning=bad,critical=bad" or "warning=all,critical=none". So to show only the "bad" services when a warning is given use "warning=bad".
+   ARG4  Used to specify which type of services to display based on the StartMode. Only services with a StartMode matching this regular expression will be included. Examples: To include only manually started services use "-4 manual". To include all automatic and manual services use "-4 auto|man"
+      This list is optional and applied before the exclusion list.
+   WARN/CRIT  can be used as described below. for example to show
       $field_lists{'checkservice'}
 
    Note:  
-      A "Good" service is one that is Started, its State is Running and its Status is OK. Anything else is considered "Bad". If you don't want certain services include in this count then you will need to exclude them with -o ARG2
+      A "Good" service is one that is Started, its State is Running and its Status is OK. Anything else is considered "Bad". If you don't want certain services included in this count then you will need to exclude them with -o ARG2
 
 checksmart  
    Check the SMART status of all hard drives on the system. Will only work for physical drives (ie not on disks in a virtual machine!). Probably will not work for disk array drives as they are not normally presented to the system as disks. Reports if any drives are failing the SMART checks which signals
@@ -2808,6 +2822,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
          if ($parameter[1]) {
             $final_result=sprintf($parameter[1],$final_result);
          }
+      } else {
+         $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
       }
    } else {
       # not enough WMI data to return result
@@ -2848,6 +2864,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
          if ($parameter[1]) {
             $final_result=sprintf($parameter[1],$final_result);
          }
+      } else {
+         $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
       }
    } else {
       # not enough WMI data to return result
@@ -2883,6 +2901,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
          if ($parameter[1]) {
             $final_result=sprintf($parameter[1],$final_result);
          }
+      } else {
+         $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
       }
    } else {
       # not enough WMI data to return result
@@ -2928,6 +2948,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
          if ($parameter[1]) {
             $final_result=sprintf($parameter[1],$final_result);
          }
+      } else {
+         $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
       }
    } else {
       # not enough WMI data to return result
@@ -2961,6 +2983,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       if ($parameter[1]) {
          $final_result=sprintf($parameter[1],$final_result);
       }
+   } else {
+      $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
    }
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
@@ -2991,6 +3015,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
             $final_result=sprintf($parameter[2],$final_result);
          }
       }
+   } else {
+      $debug && print "WARNING: The value in one of the requested fields ($parameter[0] or $parameter[1]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}' and '$$wmidata[$query_index][$which_row]{$parameter[1]}'\n";
    }
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
@@ -3015,10 +3041,12 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    if (!looks_like_number($first_value)) {
       # assume it is actually a WMI field name and so use the value in the field
       $first_value=$$wmidata[$query_index][$which_row]{$parameter[0]};
+      $debug && print "BasicMaths: Assuming that the specified value ($parameter[0]) is actually a WMI Field name and hence using the value '$first_value' for the calculation\n";
    }
    if (!looks_like_number($second_value)) {
       # assume it is actually a WMI field name and so use the value in the field
       $second_value=$$wmidata[$query_index][$which_row]{$parameter[2]};
+      $debug && print "BasicMaths: Assuming that the specified value ($parameter[2]) is actually a WMI Field name and hence using the value '$second_value' for the calculation\n";
    }
    
    if (looks_like_number($first_value) && looks_like_number($second_value)) {
@@ -3036,6 +3064,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       if ($parameter[3]) {
          $final_result=sprintf($parameter[3],$final_result);
       }
+   } else {
+      $debug && print "WARNING: The value in one of the requested fields ($parameter[0] or $parameter[2]) does not look like a number - we got '$first_value' and '$second_value'\n";
    }
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
@@ -3054,6 +3084,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    if ($timestamp_sec ne '') {
       $final_result=$age;
       $debug && print " $final_result\n";
+   } else {
+      $debug && print "WARNING: Could not convert the WMI timestamp field ($parameter[0]) with a value of '$$wmidata[$query_index][$which_row]{$parameter[0]}' to a number of seconds\n";
    }
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
@@ -3076,11 +3108,13 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       if ($parameter[1]) {
          $final_result=sprintf($parameter[1],$final_result);
       }
+   } else {
+      $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
    }
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
 } elsif ($function eq 'KBtoB') {
-   # converts a number of kilo bytes to bytes - then we can use our standard scaling routine on the number for a niver display
+   # converts a number of kilo bytes to bytes - then we can use our standard scaling routine on the number for a nicer display
    # BYTEFACTOR is used in this calculation
    # it requires one completed WMI query
    # the parameters for this "function" are
@@ -3099,6 +3133,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       if ($parameter[1]) {
          $final_result=sprintf($parameter[1],$final_result);
       }
+   } else {
+      $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
    }
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
@@ -3131,6 +3167,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       if ($parameter[4]) {
          $final_result=sprintf($parameter[4],$final_result);
       }
+   } else {
+      $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
    }
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
@@ -3149,6 +3187,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       $debug && print "Core Calc: 1 * $$wmidata[$query_index][$which_row]{$parameter[0]} = ";
       $final_result=1 * $$wmidata[$query_index][$which_row]{$parameter[0]};
       $debug && print " $final_result\n";
+   } else {
+      $debug && print "WARNING: The value '$parameter[0]' does not look like a number\n";
    }
    if ($parameter[2]) {
       $final_result=sprintf($parameter[2],$final_result);
@@ -4769,6 +4809,7 @@ print $this_combined_data;
 finish_program($test_result);
   
 }
+#-------------------------------------------------------------------------
 sub checkservice {
 # ------------------------ checking all services
 my $where_bit='';
@@ -4801,7 +4842,12 @@ my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
 check_for_data_errors($data_errors);
 
 # at this point we can assume that we have all the data we need stored in @collected_data
-my $result_text='';
+my %result_text=(
+   all   => '',
+   ok    => 'Showing only OK: ',
+   bad   => 'Showing only BAD: ',
+   none  => 'Showing no results. ',
+   );
 # now loop through the results, showing the ones requested
 my $num_ok=0;
 my $num_bad=0;
@@ -4817,8 +4863,23 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
       if (  $auto_mode || 
             ( !$auto_mode && ($$row{'DisplayName'}=~/$the_arguments{'_arg1'}/i || $$row{'Name'}=~/$the_arguments{'_arg1'}/i) ) 
          ) {
-         # process any exclusions, if they have been defined
+
          my $process_this_row=1;
+         # if argument 4 is defined then we need to include only services matching it
+         if ($the_arguments{'_arg4'}) {
+            # startmode inclusion regex defined, decide if we want this row
+            if ($$row{'StartMode'}=~/$the_arguments{'_arg4'}/i) {
+               # regex matches so include this row
+               $debug && print "---> Including by Startmode \"$$row{'DisplayName'}\" ($$row{'Name'}), StartMode=$$row{'StartMode'}\n";
+               $process_this_row=1;
+            } else {
+               # exclude this row
+               $debug && print "---> Excluding by Startmode \"$$row{'DisplayName'}\" ($$row{'Name'}), StartMode=$$row{'StartMode'}\n";
+               $process_this_row=0;
+            }
+         }
+
+         # process any exclusions, if they have been defined
          if ($the_arguments{'_arg2'}) {
             # exclusion regex defined, decide if we want this row
             if ($$row{'DisplayName'}=~/$the_arguments{'_arg2'}/i || $$row{'Name'}=~/$the_arguments{'_arg2'}/i) {
@@ -4835,27 +4896,38 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
                $num_ok++;
                if (!$auto_mode) {
                   # if we have using the regex mode then list out the services we find
-                  $result_text.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
+                  $result_text{'ok'}.=    "'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
+                  $result_text{'all'}.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
                }
             } else {
                $num_bad++;
-               $result_text.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
+               $result_text{'bad'}.=   "'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
+               $result_text{'all'}.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
             }
          }
       }
    }
 }
 
-$result_text=~s/, $/./;
+$result_text{'all'}=~s/, $/./;
+$result_text{'ok'}=~s/, $/./;
+$result_text{'bad'}=~s/, $/./;
 
 # load some values to check warn/crit against
 $collected_data[$last_wmi_data_index][0]{'_NumGood'}=$num_ok;
 $collected_data[$last_wmi_data_index][0]{'_NumBad'}=$num_bad;
 $collected_data[$last_wmi_data_index][0]{'_NumExcluded'}=$num_excluded;
 $collected_data[$last_wmi_data_index][0]{'_Total'}=$num_ok+$num_bad;
-$collected_data[$last_wmi_data_index][0]{'_ServiceList'}=$result_text;
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
+
+# we need to know the result (warn,crit etc) to help us decide what to display
+interpret_mode_list(lc($the_arguments{'_arg3'}));
+# using the value of $test_result as a key into %displaywhatwhen_mode_list
+# the resulting value tells me what I should display
+# the resulting value is a key into %result_text
+$debug && print "Since status=$test_result, results shown are: $displaywhatwhen_mode_list{$test_result}\n";
+$collected_data[$last_wmi_data_index][0]{'_ServiceList'}=$result_text{$displaywhatwhen_mode_list{$test_result}};
 
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
@@ -6446,6 +6518,47 @@ foreach my $setting (sort $ini->Parameters($ini_section)) {
 }
 $output.="-------------------------------------------------------------------\n";
 return $output;
+}
+#-------------------------------------------------------------------------
+sub interpret_mode_list {
+my ($display_mode)=@_;
+# $display_mode is a string formatted with a list of items
+# each item is in the format
+# DISPLAYWHAT=DISPLAYWHEN
+# where 
+# DISPLAYWHAT=ok,warn,critical,unknown
+# DISPLAYWHEN=all,ok,bad
+#
+if (scalar(%displaywhatwhen_mode_list)>0) {
+   # mode list is already setup so do nothing
+} else {
+   # setup the default display modes
+   %displaywhatwhen_mode_list=(
+      0 => 'all',
+      1 => 'all',
+      2 => 'all',
+      3 => 'all',
+   );
+   foreach my $dmode (split(",",$display_mode)) {
+      if ($dmode=~/^(.*?)=(.*?)$/) {
+         # check for a valid DISPLAYWHAT value
+         if (exists($string_constant{$1})) {
+            # check for a valid DISPLAYWHEN value
+            if ($2 eq 'all' || $2 eq 'ok' || $2 eq 'bad' || $2 eq 'none') {
+               # all values look ok
+               $displaywhatwhen_mode_list{$string_constant{$1}}=$2;
+            } else {
+               $debug && print "Invalid DISPLAYWHEN value of $2 provided and ignored\n";
+            }
+         } else {
+            $debug && print "Invalid DISPLAYWHAT value of $1 provided and ignored\n";
+         }
+      } else {
+         $debug && print "Incorrectly formatted DISPLAYWHAT=DISPLAYWHEN ignored\n";
+      }
+   } 
+$debug && print "Got Display-What-When Mode List as " . Dumper(\%displaywhatwhen_mode_list);
+}
 }
 #-------------------------------------------------------------------------
 sub finish_program {

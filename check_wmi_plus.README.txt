@@ -1,4 +1,4 @@
-check_wmi_plus v1.58
+check_wmi_plus v1.59
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -285,7 +285,7 @@ checkeventlog
    ARG3  Number of past hours to check for events. Default is 1
    ARG4  Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
       ie use the eventdefault section settings from the ini file. The ini file contains regular expression based inclusion
-      and exclusion rules to accurately define the events you want to or don't want to see. See the events.ini file for details.
+      and exclusion rules to accurately define the events you want to or don't want to see. Event inclusions and exlusions rules are ANDed together. See the events.ini file for details.
    WARN/CRIT   can be used as described below.
       The only valid Warning/Critical Field is _ItemCount, so you don't even need to specify it!.
 
@@ -420,12 +420,15 @@ checkservice
       Use Auto to check that all automatically started services are OK.
    ARG2  A regular expression that matches against the short or long service name that can be seen in the properties of the
       service in Windows. The matching services are excluded in the resulting list.
-      This exclusion list is applied after the inclusion list.
-   WARN/CRIT  can be used as described below.
+      This exclusion list is optional and applied after the inclusion list.
+   ARG3  Optionally used to specify what type of services to display under which conditions. If not specified, all services are shown in all conditions. This is a comma delimited list of specifications in the following format: WHEN=WHAT, where WHEN is one of ok,warning,critical,unknown and WHAT is one of all,ok,bad,none. Examples: "ok=none,warning=bad,critical=bad" or "warning=all,critical=none". So to show only the "bad" services when a warning is given use "warning=bad".
+   ARG4  Used to specify which type of services to display based on the StartMode. Only services with a StartMode matching this regular expression will be included. Examples: To include only manually started services use "-4 manual". To include all automatic and manual services use "-4 auto|man"
+      This list is optional and applied before the exclusion list.
+   WARN/CRIT  can be used as described below. for example to show
       Valid Warning/Critical Fields are: _NumBad (Default), _NumGood, _NumExcluded, _Total
 
    Note:  
-      A "Good" service is one that is Started, its State is Running and its Status is OK. Anything else is considered "Bad". If you don't want certain services include in this count then you will need to exclude them with -o ARG2
+      A "Good" service is one that is Started, its State is Running and its Status is OK. Anything else is considered "Bad". If you don't want certain services included in this count then you will need to exclude them with -o ARG2
 
 checksmart  
    Check the SMART status of all hard drives on the system. Will only work for physical drives (ie not on disks in a virtual machine!). Probably will not work for disk array drives as they are not normally presented to the system as disks. Reports if any drives are failing the SMART checks which signals
@@ -501,6 +504,13 @@ INI FILE HELP SUMMARY
    Developed and tested by Patrick Fratczak. Typically run with -c 0, to go critical when any failed replicas are found.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
+
+ checkcpuperf, percusertime (-m checkcpuperf -s percusertime)  
+   No help available
+
+   DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
+
+   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ContextSwitchesPerSec (Default)
 
  checkdhcp, stats (-m checkdhcp -s stats)  
    Checks various stats for Microsoft Windows Server running as an IPv4 DHCP Server
@@ -1176,10 +1186,10 @@ INI FILE HELP SUMMARY
 Plugin Elapsed with Usage Stats
    Plugin Elapsed
       Preparation
-         [Open INI Files: 0.279s]
-      Plugin Elapsed: 0.286s
+         [Open INI Files: 0.288s]
+      Plugin Elapsed: 0.295s
       Usage Logging
-         [Insert: 0.572s]
-      Usage Logging: 0.577s
-   Plugin Elapsed with Usage Stats: 0.864s
-CPU - User:0.504 (0.504+0) System:0.013 (0.013+0) MyTotal:0.517 ChildTotal:0 Total:0.517 Elapsed:0.286 WMIC_Calls:0 WMIC_Library_Calls:0
+         [Insert: 0.291s]
+      Usage Logging: 0.297s
+   Plugin Elapsed with Usage Stats: 0.592s
+CPU - User:0.528 (0.528+0) System:0.023 (0.023+0) MyTotal:0.551 ChildTotal:0 Total:0.551 Elapsed:0.295 WMIC_Calls:0 WMIC_Library_Calls:0
