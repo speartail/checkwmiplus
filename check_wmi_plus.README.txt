@@ -1,0 +1,473 @@
+check_wmi_plus v1.44
+For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
+The --help output follows - 
+
+Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-t TIMEOUT] [-y DELAY] [-x NODATAEXIT] [-n] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] 
+
+where 
+BYTEFACTOR is either 1000 or 1024 and is used for conversion units eg bytes to GB. Default is 1024.
+TIMEOUT is in seconds
+INIFILE is the full path of an ini file to use.
+INIDIR is the full path of an ini directory to use. The plugin reads files ending in .ini in INIDIR in the default directory order.
+   The INIFILE is read first, if defined, then each .ini file found in INIDIR. Ini files read later merge with earlier ini files.
+   For any settings that exist in one or more files, the last one read is set.
+-d Enable debug. Use this to see a lot more of what is going on including the exact WMI Query and results. User/passwords
+   should be masked unless -z is specified.
+-z Provide full specification warning and critical values for performance data. 
+   Not all performance data processing software can handle this eg PNP4Nagios
+-n Controls how the plugin responds when no data is returned by the WMI query. Normally, the plugin returns an Unknown error.
+   If you specify this option then you can use WARN/CRIT checking on the _ItemCount field. This is only useful for some
+   check eg checkfilesize where you might get no data back from the WMI query.
+NODATAEXIT is the plugin result if the WMI Query returns no data. Ignored if -n is set.
+      Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown.
+      Only used for some checks. All checks from the ini file can use this.
+
+
+There is an ini file/dir configured. These contain more checks.
+--inihelp on its own shows a one line summary of all MODES/SUBMODES contained within the ini files.
+--inihelp specified with a MODE/SUBMODE shows the help just for that mode.
+All of the inihelp is also shown at the end of this help text.
+
+MODE=checkcpu
+-------------
+   Some CPU checks just take whatever WMI or SNMP gives them from the precalculated values. We don't.
+   We use WMI Raw counters to calculate values over a given timeperiod. 
+   This is much more accurate than taking Formatted WMI values.
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+   WARN/CRIT can be used as described below.
+   The only valid Warning/Critical Field is _AvgCPU, so you don't even need to specify it!.
+
+MODE=checkcpuq
+--------------
+   The WMI implementation of CPU Queue length is a point value.
+   We try and improve this slightly by performing several checks and averaging the values.
+   ARG1: (optional) specifies how many point checks are performed. Default 3.
+   DELAY: (optional) specifies the number of seconds between point checks. Default 1. It can be 0 but in reality there will always 
+      be some delay between checks as it takes time to perform the actual WMI query 
+   WARN/CRIT can be used as described below.
+      The only valid Warning/Critical Field is _AvgCPUQLen, so you don't even need to specify it!.
+   
+   Note: Microsoft says "A sustained processor queue of greater than two threads generally indicates
+   processor congestion.". However, we recommended testing your warning/critical levels to determine the
+   optimal value for you.
+   
+MODE=checkdrivesize
+-------------------
+   ARG1: drive letter or volume name of the disk to check. If omitted or set to . all drives will be included.
+      To include multiple drives separate them with a |. This uses a regular expression so take care to
+      specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data"
+   ARG2: Set this to 1 to use volumes names (if they are defined) in plugin output and performance data ie -o 1
+   ARG3: Set this to 1 to include information about the sum of all disk space on the entire system.
+      If you set this you can also check warn/crit against the overall disk space.
+      To show only the overall disk, set ARG3 to 1 and set ARG2 to 1 (actually to any non-existant disk)
+   WARN/CRIT can be used as described below.
+      Valid Warning/Critical Fields are: _Used% (Default), _UsedGB, _Free%, _FreeGB.
+
+MODE=checkeventlog
+------------------
+   ARG1: Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer".
+      Default is system
+   ARG2: Severity Number, 2 = warning 1 = error. The plugin shows all severity levels less than and equal to the one chosen.
+      Default is 1.
+   ARG3: Number of past hours to check for events. Default is 1
+   ARG4: Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
+      ie use the eventdefault section settings from the ini file. The ini file contains regular expression based inclusion
+      and exclusion rules to accurately define the events you want to or don't want to see. See the event.ini file for details.
+   WARN/CRIT can be used as described below.
+      The only valid Warning/Critical Field is _ItemCount, so you don't even need to specify it!.
+
+   Examples:
+      to report all errors that got logged in the past 24 hours in the System event log use: 
+      -a System -3 24
+      to report all warnings and errors that got logged in the past 4 hours in the Application event log use: 
+      -a application -o 2 -3 4
+      to report your custom mix of event log messages from the system event log use: 
+      -4 eventinc_1,eventinc_2,eventinc_3,eventexclude_1
+
+MODE=checkfileage
+----------------
+   ARG1: full path to the file. Use '/' (forward slash) instead of '\' (backslash).
+   ARG2: set this to one of the time multipliers (wk, yr, hr, sec, mth, min, day)
+      This becomes the display unit and the unit used in the performance data. Default is hr.
+      -z can not be used for this mode.
+   WARN/CRIT can be used as described below.
+      The only valid Warning/Critical Field is _FileAge, so you don't even need to specify it!
+      The warning/critical values should be specified in seconds. However you can use the time multipliers
+      (wk, yr, hr, sec, mth, min, day) to make it easier to use 
+      eg instead of putting -w 3600 you can use -w 1hr
+      eg instead of putting -w 5400 you can use -w 1.5hr
+      Typically you would specify something like -w 24: -c 48:
+
+MODE=checkfilesize
+------------------
+   ARG1: full path to the file. Use '/' (forward slash) instead of '\' (backslash).
+      eg "C:/pagefile.sys" or "C:/windows/winhlp32.exe"
+   NODATAEXIT can be set for this check.
+   WARN/CRIT can be used as described below.
+   If you specify -n then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
+      This allows you to control how the plugin responds to non-existant files.
+      Valid Warning/Critical Fields are: FileSize (Default), _ItemCount.
+
+MODE=checkfoldersize
+--------------------
+   WARNING - This check can be slow and may timeout, especially if including subdirectories. 
+      It can overload the Windows machine you are checking. Use with caution.
+   ARG1: full path to the folder. Use '/' (forward slash) instead of '\' (backslash). eg "C:/Windows"
+   ARG4: Set this to s to include files from subdirectories eg -x s
+   NODATAEXIT can be set for this check.
+   WARN/CRIT can be used as described below.
+   If you specify -n then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
+      This allows you to control how the plugin responds to non-existant files.
+      Valid Warning/Critical Fields are: _FolderSize (Default), _ItemCount.
+
+MODE=checkmem
+-------------
+   This mode checks the amount of physical RAM in the system.
+   WARN/CRIT can be used as described below.
+      Valid Warning/Critical Fields are: _MemUsed% (Default), _MemFree%, _MemUsed, _MemFree, _MemTotal.
+
+MODE=checknetwork
+-----------------
+   These network checks use WMI Raw counters to calculate values over a given timeperiod. 
+   This is much more accurate than taking Formatted WMI values.
+   ARG1: Specify with network adapter the stats are collected for.
+      The name of the network adaptors as seen from WMI are similar to what is seen in the output of the 
+      ipconfig/all command on Windows. However, its not exactly the same. Run without -a to list the adapter
+      names according to WMI. Typically you need to use '' around the adapter name when specifying.
+      eg -a 'Intel[R] PRO_1000 T Server Adapter _2 - Packet Scheduler Miniport'
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+   WARN/CRIT can be used as described below.
+      Valid Warning/Critical Fields are: CurrentBandwidth (Default), _PacketsSentPersec, _PacketsReceivedPersec, OutputQueueLength, PacketsReceivedErrors, _BytesSentPersec, _BytesReceivedPersec
+   BYTEFACTOR defaults to 1000 for this mode. You can override this if you wish.
+   
+MODE=checkpage
+--------------
+   This mode checks the amount of page file usage.
+   The total page file size varies between the Initial size and the Maximum Size you set in Windows.
+   ARG1: Set this to "auto" to automatically set warning/critical levels. The warning level is set to the same as the
+      inital size of the page file. The critical level is set to 80% of the maximum page file size.
+      If set, it is used instead of any command line specification of warning/critical settings.
+      Note: The separate WMI query to obtain the additional information required to use this setting does not
+      always work eg it does not work on our test Windows Server 2008 instance (it might on yours).
+   WARN/CRIT can be used as described below.
+   Valid Warning/Critical Fields are: _Used% (Default), _Used, _Free, _Free%, _PeakUsed%, _PeakUsed, _PeakFree, _PeakFree%, _Total.
+
+MODE=checkprocess
+-----------------
+   SUBMODE: Set this to Name or Commandline to determine if ARG1 matches against just the process name (Default) or 
+      the commplete Command line used to run the process.
+   ARG1: A regular expression to match against the process name or complete command line. Use . alone to count all processes.
+         Typically the process command line is made up of DRIVE:PATH\PROCESSNAME PARAMETERS
+         Use '/' (forward slash) instead of '\' (backslash). eg "C:/Windows" or "C:/windows/system32"
+         Note: Any '/' in your regular expression will get converted to '\\'.
+   ARG2: Set this to 'Name' (Default) or 'Commandline' to display the process names or the whole command line.
+   WARN/CRIT can be used as described below.
+      The only valid Warning/Critical Field is _ItemCount, so you don't even need to specify it!
+   
+MODE=checkservice
+-----------------
+   ARG1: the short or long service name that can be seen in the properties of the service in Windows
+      Regular expressions can be used. Use Auto to check that all automatically started services are OK.
+   WARN/CRIT can be used as described below.
+      Valid Warning/Critical Fields are: _NumBad (Default), _NumGood, _Total
+
+MODE=checkuptime
+----------------
+   WARN/CRIT can be used as described below.
+      The only valid Warning/Critical Field is SystemUpTime, so you don't even need to specify it!
+      The warning/critical values should be specified in seconds. However you can use the time multipliers
+      (wk, yr, hr, sec, mth, min, day) to make it easier to use 
+      eg instead of putting -w 1800 you can use -w 30min
+      eg instead of putting -w 5400 you can use -w 1.5hr
+      Typically you would specify something like -w 10min: -c 20min:
+
+MODE=checkwsusserver
+--------------------
+   If there are any WSUS related errors in the event log in the last 24 hours a CRITICAL state is returned.
+   This mode has been removed. You can perform the same check that this used to perform by using MODE=checkeventlog 
+   using the wsusevents ini section. The command line parameters are:
+   -m checkeventlog -o 2 -3 24 -4 wsusevents -c 0
+
+WARNING and CRITICAL Specification:
+===================================
+
+If warning or critical specifications are not provided then no checking is done and the check simply returns the value and any related performance data. If they are specified then they should be formatted as shown below.
+
+A range is defined as a start and end point (inclusive) on a numeric scale (possibly negative or positive infinity). The theory is that the plugin will do some sort of check which returns back a numerical value, or metric, which is then compared to the warning and critical thresholds. 
+
+Multiple warning or critical specifications can be specified. This allows for quite complex range checking and/or checking against multiple FIELDS (see below) at one time. The warning/critical is triggered if ANY of the warning/critical specifications are triggered.
+
+If a ini file check returns multiple rows eg checkio logical, criteria are applied to ALL rows and any ONE row meeting the criteria will cause a trigger. If the check has been defined properly it will show which row/instance trigger the criteria as well as the overall result.
+
+This is the generalised format for ranges:
+FIELD=[@]start:end
+
+Notes:
+   1. FIELD describes which value the specification is compared against. It is optional (the default is dependent on the MODE).
+   2. start <= end
+   3. start and ":" is not required if start=0
+   4. if range is of format "start:" and end is not specified, assume end is infinity
+   5. to specify negative infinity, use "~"
+   6. alert is raised if metric is outside start and end range (inclusive of endpoints)
+   7. if range starts with "@", then alert if inside this range (inclusive of endpoints)
+   8. The start and end values can use multipliers from the following list: e, p, k, g, m, t
+      eg 1G for 1 x 10^9 or 2.5k for 2500
+
+FIELDs that start with _ eg _Used% are calculated or derived values
+FIELDs that are all lower case are command line arguments eg _arg1
+Other FIELDs eg PacketsSentPersec are what is returned from the WMI Query
+
+
+Example ranges:
+
+WARN/CRIT definition    Generate an alert if x...
+10                      < 0 or > 10, (outside the range of {0 .. 10})
+10:                     < 10, (outside {10 .. 8})
+~:10                    > 10, (outside the range of {-infinity .. 10})
+10:20                   < 10 or > 20, (outside the range of {10 .. 20})
+@10:20                  = 10 and = 20, (inside the range of {10 .. 20})
+10                      < 0 or > 10, (outside the range of {0 .. 10})
+10G                     < 0 or > 10G, (outside the range of {0 .. 10G})
+
+FIELD examples - for MODE=checkdrivesize:
+_UsedGB=10G             Check if the _UsedGB field is < 0 or > 10G, (outside the range of {0 .. 10G}) 
+10                      Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}), since _Used% is the default
+_Used%=10               Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}) 
+
+FIELD examples with multiple specifications - for MODE=checkdrivesize:
+eg -w _UsedGB=10G   -w 15   -w _Free%=5:  -c _UsedGB=20G   -c _Used%=25
+This will generate a warning if 
+   - the Used GB on the drive is more than 10G or 
+   - the used % of the drive is more than 15% or
+   - the free % of the drive is less than 5%
+This will generate a critical if 
+   - the Used GB on the drive is more than 20G or 
+   - the used % of the drive is more than 25%
+
+WARN and/or CRIT are not used for the following MODES: checkwsusserver.
+
+=====================
+=====================
+Ini File Help Summary
+=====================
+=====================
+The ini file and/or dir provides the following Modes and/or Submodes:
+
+
+MODE=checkio, SUBMODE=logical
+=============================
+   Check logical disk IO. 
+   These disks checks use WMI Raw counters to calculate values over a given timeperiod. 
+   This is much more accurate than taking Formatted WMI values.
+   ARG1: Name of the logical Windows drive to check eg C:. Use % for Wilcard.
+      Use _Total to check all drives combined.
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+      
+   Note that some of the PercentDisk values seem to give incorrect values. Use with caution.
+   This check can return data for multiple drives in a single check.
+
+MODE=checkio, SUBMODE=physical
+==============================
+   Check physical disk IO. 
+   These disks checks use WMI Raw counters to calculate values over a given timeperiod. 
+   This is much more accurate than taking Formatted WMI values.
+   ARG1: Name of the logical Windows drive to check eg C: Use % for Wilcard.
+      Use _Total to check all drives combined.
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+      
+   Note that some of the PercentDisk values seem to give incorrect values. Use with caution.
+   This check can return data for multiple drives in a single check.
+
+MODE=checkio, SUBMODE=old_logical
+=================================
+   Check logical disk IO. Superseeded by checkio logical.
+   ARG1: Name of the logical Windows drive to check eg C:
+      Use _Total to check all drives combined.
+
+MODE=checkio, SUBMODE=old_physical
+==================================
+   Check physical disk IO. Superseeded by checkio physical.
+   ARG1: Name of the physical Windows drive to check eg C: 
+      Use _Total to check all drives combined.
+
+MODE=checkproc, SUBMODE=cmdline
+===============================
+   An ini implementation similar to checkprocess. 
+   ARG1: The exact command line to search for. Use / instead of \\.
+      e.g. C:/WINDOWS/system32/services.exe
+   Use -n and/or NODATAEXIT settings to control what happens if no matching process is found
+
+MODE=checkproc, SUBMODE=memory
+===============================
+   Check memory details for individual processes
+   ARG1: The processname to look for. Use % for wildcards.
+      The process name typically only includes the actual file name minus its suffix eg firefox, svchost
+      If there are multiple instances eg svchost, then some versions of Windows have them named all the same while others
+      such as Windows 2008 Server, have them numbered eg svchost#1, svchost#2, svchost#3. To get all svchost processes you
+      need to set ARG1 to svchost%
+      To view all processes set ARG1 to "%" and the full process list will be included in the plugin output.
+   Use -n and/or NODATAEXIT settings to control what happens if no matching process is found
+
+MODE=checkts, SUBMODE=showsessions
+==============================
+   Show current Terminal Services Session names. Use this check, normally from the command line, to list the 
+   curent session names. Session names are then used in other checkts checks.
+
+MODE=checkts, SUBMODE=sessions
+==============================
+   Check Terminal Services Sessions.
+
+MODE=checkts, SUBMODE=sessioninfo
+=================================
+   Check Terminal Services Session Info for specific sessions.
+   ARG1: Name of the TS Session eg console
+      Note: Not tested on a real terminal services server - you might need to play with this to get what you need.
+         Not quite sure what the session names really look like except for "console".
+         Please post notes back to www.edcint.co.nz/checkwmiplus to help others. Thanks
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checkeachcpu
+=================
+   Get CPU performance (like checkcpu) but provide information for each CPU. Cores are seen as CPUs. 
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checkdns, SUBMODE=stats
+============================
+   Checks various stats for Microsoft Windows Server running as a DNS Server
+   Tested for Windows Server 2008 R2. Only tested on a low volume server.
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checkdhcp, SUBMODE=stats
+=============================
+   Checks various stats for Microsoft Windows Server running as an IPv4 DHCP Server
+   Tested for Windows Server 2008 R2. Only tested on a low volume server.
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checkdhcpv6, SUBMODE=stats
+=============================
+   Checks various stats for Microsoft Windows Server running as an IPv6 DHCP Server
+   Tested for Windows Server 2008 R2. Only tested on a zero volume server!!
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=print, SUBMODE=spooler
+===========================
+   Checks various print spooler stats
+   Tested for Windows Server 2008 R2. Only tested on a low volume server
+   ARG1: The printer queue name to view stats for. Use _Total for the total stats for all print queues.
+      Use % for wildcards. The printer queue name can be seen in the Device and Printer screen
+      eg "Microsoft XPS Document Writer", "%laser%"
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+   This check can return information about multiple printers in a single check.
+
+MODE=sample, SUBMODE=minimal
+============================
+   Help for a sample check that specifies only a minimal amount of configuration in the ini File.
+   This sample simply displays the Name of the Operating System
+   It has no warning/critical specification and provides no performance data
+
+MODE=sample, SUBMODE=full
+=========================
+   Help for a sample check that specifies all currently possible fields in the ini File
+
+MODE=checkiis, SUBMODE=users
+============================
+   Check user stats for a Microsoft IIS Web Server.
+   Tested for IIS version 6.0 and 7.5. Only tested on a low volume server.
+   ARG1: The web server instance name to view stats for. Use _Total for the total stats for all web sites.
+      The web server instance name can be seen in the Microsoft IIS Manager.
+      eg "Default Web Site"
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checkiis, SUBMODE=requests
+===============================
+   Check request stats for a Microsoft IIS Web Server.
+   Tested for IIS version 6.0 and 7.5. Only tested on a low volume server.
+   ARG1: The web server instance name to view stats for. Use _Total for the total stats for all web sites.
+      The web server instance name can be seen in the Microsoft IIS Manager.
+      eg "Default Web Site"
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checkiis, SUBMODE=transfers
+================================
+   Check transfer stats (bytes and files) for a Microsoft IIS Web Server.
+   Tested for IIS version 6.0 and 7.5. Only tested on a low volume server.
+   ARG1: The web server instance name to view stats for. Use _Total for the total stats for all web sites.
+      The web server instance name can be seen in the Microsoft IIS Manager.
+      eg "Default Web Site"
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checkiis, SUBMODE=transfersV5
+==================================
+   Check transfer stats (bytes and files) for a Microsoft IIS Web Server.
+   Tested for IIS version 5.1 (Windows XP). Only tested on a low volume server.
+   ARG1: The web server instance name to view stats for. Use _Total for the total stats for all web sites.
+      The web server instance name can be seen in the Microsoft IIS Manager.
+      eg "Default Web Site"
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checkiis, SUBMODE=connections
+==================================
+   Check connection stats for a Microsoft IIS Web Server.
+   Tested for IIS version 6.0 and 7.5. Only tested on a low volume server.
+   ARG1: The web server instance name to view stats for. Use _Total for the total stats for all web sites.
+      The web server instance name can be seen in the Microsoft IIS Manager.
+      eg "Default Web Site"
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checkiis, SUBMODE=errors
+=============================
+   Check error stats for a Microsoft IIS Web Server.
+   Tested for IIS version 6.0 and 7.5. Only tested on a low volume server.
+   ARG1: The web server instance name to view stats for. Use _Total for the total stats for all web sites.
+      The web server instance name can be seen in the Microsoft IIS Manager.
+      eg "Default Web Site"
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+
+MODE=checksql, SUBMODE=listdb
+=============================
+   List all DBs in a SQL database. This is just a helper check.
+
+MODE=checksql, SUBMODE=general
+=============================
+   General SQLSERVER Statistics
+
+MODE=checksqlex, SUBMODE=listdb
+===============================
+   List all DBs in a SQL EXPRESS database. This is just a helper check.
+
+MODE=checksqlex, SUBMODE=general
+================================
+   General SQL EXPRESS Statistics
+

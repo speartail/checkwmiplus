@@ -25,7 +25,7 @@
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.43";
+my $VERSION="1.44";
 
 use strict;
 use Getopt::Long;
@@ -74,6 +74,9 @@ my %critical_perf_specs_parsed;  # list of parsed critical specs - a hash
 my @warn_spec_result_list;        # list of warn spec results
 my @critical_spec_result_list;    # list of critical spec results
 
+my $wmic_delimiter='|';
+my $wmic_split_delimiter='\|';
+
 #==============================================================================
 #=================================== CONFIG ===================================
 #==============================================================================
@@ -119,6 +122,7 @@ my %mode_list = (
    checkgeneric         => 1,
    checkmem             => 1,
    checknetwork         => 1,
+   checkpage            => 1,
    checkprocess         => 1,
    checkservice         => 1,
    checkuptime          => 1,
@@ -166,6 +170,7 @@ my %valid_test_fields = (
    checkmem          => [ qw(_MemUsed% _MemFree% _MemUsed _MemFree _MemTotal) ],
    checknetwork      => [ qw(CurrentBandwidth _PacketsSentPersec _PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors _BytesSentPersec _BytesReceivedPersec) ],
    checknetwork_OLD  => [ qw(CurrentBandwidth PacketsSentPersec PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors BytesSentPersec BytesReceivedPersec PacketsSentPersec) ],
+   checkpage         => [ qw(_Used% _Used _Free _Free% _PeakUsed% _PeakUsed _PeakFree _PeakFree% _Total) ], 
    checkprocess      => [ qw(_ItemCount) ],
    checkservice      => [ qw(_NumBad _NumGood _Total) ],
    checkuptime       => [ qw(SystemUpTime) ],
@@ -207,6 +212,7 @@ my %display_fields = (
    checkmem          => [ '_DisplayMsg||~|~| - ||', 'MemType||~|~|~||: ', '_MemTotal|#B|Total|: | - ||', '_MemUsed|#B|Used|: | ||', '_MemUsed%|%|~|~| - |(|)', '_MemFree|#B|Free|: | ||', '_MemFree%|%|~|~||(|)' ], 
    checknetwork      => [ '_DisplayMsg||~|~| - ||', 'Name||Interface: |~| ||', 'CurrentBandwidth|#bit/s|Speed:|~| |(|)', '_BytesSentPersec|#B/sec|Byte Send Rate||||', '_BytesReceivedPersec|#B/sec|Byte Receive Rate||||', '_PacketsSentPersec|#packet/sec|Packet Send Rate||||', '_PacketsReceivedPersec|#packet/sec|Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
    checknetwork_OLD  => [ '_DisplayMsg||~|~| - ||', 'Name||Interface: |~| ||', 'CurrentBandwidth|#bit/s|Speed:|~| |(|)', 'BytesSentPersec|#B/sec|Byte Send Rate||||', 'BytesReceivedPersec|#B/sec|Byte Receive Rate||||', 'PacketsSentPersec||Packet Send Rate||||', 'PacketsReceivedPersec||Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
+   checkpage         => [ '_DisplayMsg||~|~| - ||', '_Total|#B|Total|: | - ||', '_Used|#B|Used|: | ||', '_Used%|%|~|~| - |(|)', '_Free|#B|Free|: | ||', '_Free%|%|~|~||(|)', '_PeakUsed|#B|Peak Used|: | ||', '_PeakUsed%|%|~|~| - |(|)', '_PeakFree|#B|Peak Free|: | ||', '_PeakFree%|%|~|~||(|)' ], 
    checkprocess      => [ '_DisplayMsg||~|~| - ||', '_ItemCount| Instance(s)|Found |~|~|| of "{_arg1}" running.', 'ProcessList||~|~|~||' ],
    checkservice      => [ '_DisplayMsg||~|~| - ||', '_Total| Services(s)|Found |~|||', '_NumGood| OK|~|~| and ||', '_NumBad| with problems. |~|~|~||', '_ServiceList||~|~|~||' ],
    checkuptime       => [ '_DisplayMsg||~|~| - ||', '_DisplayTime||System Uptime is |~|.||' ],
@@ -234,6 +240,7 @@ my %performance_data_fields = (
    checkmem          => [ '_MemUsed|Bytes|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ], 
    checknetwork      => [ '_BytesSentPersec', '_BytesReceivedPersec', '_PacketsSentPersec', '_PacketsReceivedPersec', 'OutputQueueLength', 'PacketsReceivedErrors' ],
    checknetwork_OLD  => [ 'BytesSentPersec', 'BytesReceivedPersec', 'PacketsSentPersec', 'PacketsReceivedPersec', 'OutputQueueLength', 'PacketsReceivedErrors' ],
+   checkpage         => [ '_Total|Bytes|Page File Size', '_Used|Bytes|Used', '_Used%|%|Utilisation', '_PeakUsed|Bytes|Peak Used', '_PeakUsed%|%|Peak Utilisation' ], 
    checkprocess      => [ '_ItemCount||Process Count' ],
    checkservice      => [ '_Total||Total Service Count', '_NumGood||Service Count OK State', '_NumBad||Service Count Problem State' ],
    checkuptime       => [ '_UptimeMin|min|Uptime Minutes' ],
@@ -244,6 +251,14 @@ my %performance_data_fields = (
 #==============================================================================
 #================================== PARAMETERS ================================
 #==============================================================================
+
+my @saved_ARGV=@ARGV;
+
+# if the user is using a DOS type file for their nagios command/service definitions then we may see a CR character at the end of the command line
+# remove it by doing a regex on the last character of the last parameter (if it is set)
+if ($ARGV[$#ARGV]) {
+   $ARGV[$#ARGV]=~s/\r$//;
+}
 
 Getopt::Long::Configure('no_ignore_case');
 GetOptions(
@@ -262,7 +277,7 @@ GetOptions(
    "critical=s@"        => \$opt_critical,
    "timeout=i"          => \$the_arguments{'_timeout'},
    "bytefactor=s"       => \$the_arguments{'_bytefactor'},
-   "debug"              => \$debug,
+   "debug+"             => \$debug,
    "nodata"             => \$the_arguments{'_nodata'},
    "xnodataexit=s"      => \$the_arguments{'_nodataexit'},
    "value=s"            => \$opt_value,
@@ -275,10 +290,16 @@ GetOptions(
    );
 
 if ($opt_package) {
-   my $tarfile='check_wmi_plus.tar.gz';
+   my $tarfile="check_wmi_plus.v$VERSION.tar.gz";
    # tar up the files and dir, exclude subversion directory
+   # run the plugin and put its help screen in a readme
+   my $output=`$0 --help`;
+   open(README,">$base_dir/check_wmi_plus.README.txt");
+   print README "check_wmi_plus v$VERSION\nFor installation details and more downloads see http://www.edcint.co.nz/checkwmiplus\nThe --help output follows - \n\n";
+   print README $output;
+   close(README);
    # a bit of hard coding here .....
-   my $output=`cd $base_dir;tar czvf check_wmi_plus.tar.gz --exclude=.svn check_wmi_plus.pl check_wmi_plus.d`;
+   $output=`cd $base_dir;tar czvf $tarfile --exclude=.svn check_wmi_plus.pl check_wmi_plus.README.txt check_wmi_plus.d`;
    print $output;
    print "Created $base_dir/$tarfile\n";
    exit 0;
@@ -286,6 +307,26 @@ if ($opt_package) {
 
 if ($debug) {
    use Data::Dumper; # only use module if you have to
+   my $command_line=join(' ',@saved_ARGV);
+   if (! $opt_z) {
+      # try and mask any user/password
+      $command_line=~s/-u\s*(\S*?)\s/-u USER /;
+      $command_line=~s/-p\s*(\S*?)\s/-p PASS /;
+   }
+   print "Command Line (v$VERSION): $0 $command_line\n";
+   if ($debug>=2) {
+      # get some info about the system
+      $wmic_delimiter='!';
+      $wmic_split_delimiter='!';
+      print "======================================== SYSTEM INFO =====================================================\n";
+      get_multiple_wmi_samples(1,"SELECT * FROM Win32_ComputerSystem",
+      '','',my $dummy1,\$the_arguments{'_delay'},undef,0);
+      get_multiple_wmi_samples(1,"SELECT * FROM Win32_OperatingSystem",
+      '','',my $dummy2,\$the_arguments{'_delay'},undef,0);
+      $wmic_delimiter='|';
+      $wmic_split_delimiter='\|';
+      print "======================================= END SYSTEM INFO ===================================================\n";
+   }
 }
 
 # check up on the ini file
@@ -464,15 +505,29 @@ return $ini_file;
 }
 #-------------------------------------------------------------------------
 sub show_ini_help_overview {
+# show ini help sections
+# pass in
+# 1 to get all inihelp detail, 0 to get just a one liner
+my ($give_all_detail)=@_;
+
 # it might be open already but just open it again
 my $wmi_ini=open_ini_file();
 # here we need to list out the modes available in the ini file - with some of the text from their inihelp= field
 my @ini_modes=$wmi_ini->Sections();
+$debug && print "Showing inihelp for the following modes/submodes - " . Dumper(\@ini_modes);
+my $text_for_overview="\n";
+if (!$give_all_detail) {
+   $text_for_overview="(Listed in summary form, one per line, as MODE SUBMODE - Help Text\n";
+}
+
 print<<EOT;
+=====================
+=====================
 Ini File Help Summary
 =====================
+=====================
 The ini file and/or dir provides the following Modes and/or Submodes:
-
+$text_for_overview
 EOT
 
 # if we are lucky the env variable COLUMNS has been set to the width of the terminal
@@ -486,23 +541,28 @@ foreach my $ini_mode (@ini_modes) {
    
    if ($query) {
       my $inihelp=$wmi_ini->val($ini_mode,'inihelp','No help available');
-      # we like to format our inihelp with a line as the title then a line full of ========= and then the text
-      # lets only show the text, by removing the first stuff if it exists
-      $inihelp=~s/^(.+?\n[= ]+\n)(.*)$/$2/s;
-      # convert all line breaks and multiple spaces to single spaces
-      $inihelp=~s/\n/ /sg;
-      $inihelp=~s/( +)/ /sg;
-      # remove leading spaces
-      $inihelp=~s/^( *)//sg;
-   
-      my $display="$ini_mode - $inihelp";            
+
+      my $display='';
+      if ($give_all_detail) {
+         $display="$inihelp\n";
+      } else {
+         # we like to format our inihelp with a line as the title then a line full of ========= and then the text
+         # lets only show the text, by removing the first stuff if it exists
+         $inihelp=~s/^(.+?\n[= ]+\n)(.*)$/$2/s;
+         # convert all line breaks and multiple spaces to single spaces
+         $inihelp=~s/\n/ /sg;
+         $inihelp=~s/( +)/ /sg;
+         # remove leading spaces
+         $inihelp=~s/^( *)//sg;
       
-      # if it is longer than $term_width chars then add .. to the end and truncate it to make it no longer than $term_width chars
-      $display=~s/^(.{$term_width,$term_width})(.+){1,}$/$1\.\.\./s;
+         $display="$ini_mode - $inihelp";            
+         
+         # if it is longer than $term_width chars then add .. to the end and truncate it to make it no longer than $term_width chars
+         $display=~s/^(.{$term_width,$term_width})(.+){1,}$/$1\.\.\./s;
+      }
       print "$display\n";
    }
 }
-print "\nAdd a valid Mode and/or Submode to this command line when using --inihelp to get detailed help for that ini Mode.\n";
 exit $ERRORS{'UNKNOWN'};
 }
 #-------------------------------------------------------------------------
@@ -554,7 +614,7 @@ foreach my $mode (keys %valid_test_fields) {
 short_usage(1);
 my $ini_info='';
 if ($wmi_ini_file||$wmi_ini_dir) {
-   $ini_info="\nThere is an ini file/dir configured. These contain more checks.\nUse --inihelp on its own to list the valid modes contained within the ini file.\nThey are also listed at the end of this help text.\n";
+   $ini_info="\nThere is an ini file/dir configured. These contain more checks.\n--inihelp on its own shows a one line summary of all MODES/SUBMODES contained within the ini files.\n--inihelp specified with a MODE/SUBMODE shows the help just for that mode.\nAll of the inihelp is also shown at the end of this help text.\n";
 }
 
 print <<EOT;
@@ -563,10 +623,11 @@ where
 BYTEFACTOR is either 1000 or 1024 and is used for conversion units eg bytes to GB. Default is 1024.
 TIMEOUT is in seconds
 INIFILE is the full path of an ini file to use.
-INIDIR is the full path of an ini directory to use. The plugin reads all files ending in .ini in INIDIR in the default directory order.
+INIDIR is the full path of an ini directory to use. The plugin reads files ending in .ini in INIDIR in the default directory order.
    The INIFILE is read first, if defined, then each .ini file found in INIDIR. Ini files read later merge with earlier ini files.
    For any settings that exist in one or more files, the last one read is set.
--d Enable debug. Use this to see a lot more of what is going on including the exact WMI Query and results.
+-d Enable debug. Use this to see a lot more of what is going on including the exact WMI Query and results. User/passwords
+   should be masked unless -z is specified.
 -z Provide full specification warning and critical values for performance data. 
    Not all performance data processing software can handle this eg PNP4Nagios
 -n Controls how the plugin responds when no data is returned by the WMI query. Normally, the plugin returns an Unknown error.
@@ -575,7 +636,6 @@ INIDIR is the full path of an ini directory to use. The plugin reads all files e
 NODATAEXIT is the plugin result if the WMI Query returns no data. Ignored if -n is set.
       Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown.
       Only used for some checks. All checks from the ini file can use this.
-
 
 $ini_info
 MODE=checkcpu
@@ -590,7 +650,7 @@ MODE=checkcpu
    $field_lists{'checkcpu'}.
 
 MODE=checkcpuq
--------------
+--------------
    The WMI implementation of CPU Queue length is a point value.
    We try and improve this slightly by performing several checks and averaging the values.
    ARG1: (optional) specifies how many point checks are performed. Default 3.
@@ -674,7 +734,7 @@ MODE=checkfoldersize
 
 MODE=checkmem
 -------------
-   SUBMODE: "physical" for physical memory "page" for pagefile
+   This mode checks the amount of physical RAM in the system.
    WARN/CRIT can be used as described below.
       $field_lists{'checkmem'}.
 
@@ -694,6 +754,18 @@ MODE=checknetwork
       $field_lists{'checknetwork'}
    BYTEFACTOR defaults to 1000 for this mode. You can override this if you wish.
    
+MODE=checkpage
+--------------
+   This mode checks the amount of page file usage.
+   The total page file size varies between the Initial size and the Maximum Size you set in Windows.
+   ARG1: Set this to "auto" to automatically set warning/critical levels. The warning level is set to the same as the
+      inital size of the page file. The critical level is set to 80% of the maximum page file size.
+      If set, it is used instead of any command line specification of warning/critical settings.
+      Note: The separate WMI query to obtain the additional information required to use this setting does not
+      always work eg it does not work on our test Windows Server 2008 instance (it might on yours).
+   WARN/CRIT can be used as described below.
+   $field_lists{'checkpage'}.
+
 MODE=checkprocess
 -----------------
    SUBMODE: Set this to Name or Commandline to determine if ARG1 matches against just the process name (Default) or 
@@ -739,6 +811,8 @@ A range is defined as a start and end point (inclusive) on a numeric scale (poss
 
 Multiple warning or critical specifications can be specified. This allows for quite complex range checking and/or checking against multiple FIELDS (see below) at one time. The warning/critical is triggered if ANY of the warning/critical specifications are triggered.
 
+If a ini file check returns multiple rows eg checkio logical, criteria are applied to ALL rows and any ONE row meeting the criteria will cause a trigger. If the check has been defined properly it will show which row/instance trigger the criteria as well as the overall result.
+
 This is the generalised format for ranges:
 FIELD=[@]start:end
 
@@ -756,6 +830,7 @@ Notes:
 FIELDs that start with _ eg _Used% are calculated or derived values
 FIELDs that are all lower case are command line arguments eg _arg1
 Other FIELDs eg PacketsSentPersec are what is returned from the WMI Query
+
 
 Example ranges:
 
@@ -788,7 +863,7 @@ WARN and/or CRIT are not used for the following MODES: $modelist
 EOT
 
 # add the inihelp to the end of this help
-show_ini_help_overview();
+show_ini_help_overview(1);
 
 exit $ERRORS{'UNKNOWN'};
 }
@@ -904,7 +979,13 @@ if ($slash_conversion) {
 
 # How to use an alternate namespace using wmic
 # "SELECT * From rootdse" --namespace=root/directory/ldap
-$wmi_commandline = "$wmic_command -U ${opt_username}%${opt_password} //$the_arguments{'_host'} '$wmi_query'";
+# check delimiter
+# if it is not | then add it to the command line
+my $alt_delim='';
+if ($wmic_delimiter ne '|') {
+   $alt_delim=" --delimiter='$wmic_delimiter'";
+}
+$wmi_commandline = "$wmic_command$alt_delim -U ${opt_username}%${opt_password} //$the_arguments{'_host'} '$wmi_query'";
 
 my $all_output=''; # this holds information if any errors are encountered
 
@@ -917,8 +998,15 @@ for (my $i=0;$i<$num_samples;$i++) {
    $output = `$wmi_commandline 2>&1`;
 
    $all_output.=$output;
-   $debug && print "Round #$i, looking for $column_name_regex\n";
-   $debug && print "QUERY: $wmi_commandline\nOUTPUT: $output\n";
+   if ($debug) {
+      # mask the user name and password in the wmic command, but not if $opt_z is set
+      my $cmd=$wmi_commandline;
+      if (! $opt_z) {
+         $cmd=~s/-U (.*?)%(.*?) /-U USER%PASS /;
+      }
+      print "Round #" . ($i+1) . " of $num_samples\n";
+      print "QUERY: $cmd\nOUTPUT: $output\n";
+   }
 
    # now we have to verify and parse the returned query
    # a valid return query comes back in the following format
@@ -989,7 +1077,7 @@ for (my $i=0;$i<$num_samples;$i++) {
             if ($output=~/(.*?)\n/sg) {
                $got_header=1;
                # we just use split to break out the column titles
-               @column_names=split(/\|/,$1);
+               @column_names=split(/$wmic_split_delimiter/,$1);
                $debug && print "COLUMNS:$1\n";
                $$results[0][0]{'_ChecksOK'}++;
             }
@@ -1033,7 +1121,7 @@ for (my $i=0;$i<$num_samples;$i++) {
             while ($output=~/$field_finding_regex/sg) {
                # now we have matched a result row, so break it up into fields
                if ($use_split) {
-                  @field_data=split(/\|/,$1);
+                  @field_data=split(/$wmic_split_delimiter/,$1);
                   my $header_field_number=0;
                   my $data_field_number=1; # these ones start from 1 since it makes it easier for the user to define - take care
                   $debug && print "FIELDS:";
@@ -1209,7 +1297,7 @@ foreach my $field (@{$display_fields}) {
          $this_start_bracket=$6;
          $this_end_bracket=$7;
    
-         # change .~ to nothing
+         # change ~ to nothing
          $this_display_field_name=~s/~//g;
          $this_sep=~s/~//g;
          $this_delimiter=~s/~//g;
@@ -1235,7 +1323,7 @@ foreach my $field (@{$display_fields}) {
       $this_start_bracket=~s/\{(.*?)\}/$$values{$1}/g;
       $this_end_bracket=~s/\{(.*?)\}/$$values{$1}/g;
      
-      #$debug && print "Loading up value using FIELD=$this_real_field_name\n";
+      $debug>=2 && print "Loading up value using FIELD=$this_real_field_name\n";
       # now we can extract the value
       if (defined($$values{$this_real_field_name})) {
          $this_value=$$values{$this_real_field_name};
@@ -1363,6 +1451,18 @@ if ($the_arguments{'_nodata'}) {
 }
 }
 #-------------------------------------------------------------------------
+sub check_for_invalid_calculation_result {
+# check calculated field results for validity
+# pass in 
+# a value by reference (so we can change it in place)
+my ($result)=@_;
+# sometimes on virtual machines, because of clock problems, it is possible to get negative numbers. Just make it zero.
+if ($$result<0) {
+   $debug && print " $$result - less than zero (possible hardware timing problem), forcing to ";
+   $$result=0;
+}
+}
+#-------------------------------------------------------------------------
 sub calc_new_field {
 # calculate new fields using "builtin" functions
 # pass in
@@ -1402,6 +1502,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
                            ($$wmidata[1][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  ) * 100 = ";
          $final_result=(1 - ($$wmidata[1][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
                            ($$wmidata[1][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  ) * 100;
+         check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
       }
       if ($parameter[1]) {
@@ -1436,6 +1537,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
                            ($$wmidata[1][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  ) * 100 = ";
          $final_result=(  ($$wmidata[1][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
                            ($$wmidata[1][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  ) * 100;
+         check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
       }
       if ($parameter[1]) {
@@ -1471,6 +1573,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
                        (    ($$wmidata[1][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[1][$which_row]{Frequency_Sys100NS} ) = ";
          $final_result=($$wmidata[1][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
                        (    ($$wmidata[1][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[1][$which_row]{Frequency_Sys100NS} ) ;
+         check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
       }
       if ($parameter[1]) {
@@ -1510,6 +1613,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
                        ($$wmidata[1][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) = ";
          $final_result=($$wmidata[1][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
                        ($$wmidata[1][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS});
+         check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
       }
       if ($parameter[2]) {
@@ -1824,6 +1928,8 @@ if ($data_errors) {
 sub checknetwork {
 my @collected_data;
 
+my $num_samples=2;
+
 # for network stuff we often want $actual_bytefactor to be 1000
 # so lets use that unless the user has set something else
 if (!$the_arguments{'_bytefactor'}) {
@@ -1838,8 +1944,11 @@ if ($the_arguments{'_delay'} eq '') {
 my $where_bit='';
 if ($the_arguments{'_arg1'} ne '') {
    $where_bit="where Name=\"$the_arguments{'_arg1'}\"";
+} else {
+   # only need 1 WMI query when _arg1 not specified
+   $num_samples=1; 
 }
-my $data_errors=get_multiple_wmi_samples(2,
+my $data_errors=get_multiple_wmi_samples($num_samples,
    "select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,Frequency_Sys100NS,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfRawData_Tcpip_NetworkInterface $where_bit",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
@@ -1958,7 +2067,7 @@ my $data_errors='';
 
 my $display_type='';
 # still support for the old usage of arg1
-if ($the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i) {
+if ($the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i || ($opt_submode eq '' && $the_arguments{'_arg1'} eq '') ) {
    $collected_data[0][0]{'MemType'}='Physical Memory';
    # expect output like
    #CLASS: Win32_OperatingSystem
@@ -1976,6 +2085,11 @@ if ($the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i) {
    $collected_data[0][0]{'_MemTotalK'}=$collected_data[0][0]{'TotalVisibleMemorySize'}||0;
 
 } elsif ($the_arguments{'_arg1'}=~/page/i || $opt_submode=~/page/i) {
+   print "This Mode is no longer used as it was proven to be inaccurate. Automatically using -m checkpage instead. ";
+   $opt_mode='checkpage';
+   &checkpage();
+   exit $ERRORS{'UNKNOWN'}; # should never get here
+   
    $collected_data[0][0]{'MemType'}='Page File';
    # expect output like
    #CLASS: Win32_OperatingSystem
@@ -2019,6 +2133,62 @@ if ($data_errors) {
   
 }
 #-------------------------------------------------------------------------
+sub checkpage {
+# note that for this check WMI returns data in MB so we have to multiply it up to get bytes before using scaled_bytes
+
+my @collected_data;
+my $data_errors=get_multiple_wmi_samples(1,
+   "Select AllocatedBaseSize,CurrentUsage,PeakUsage from Win32_PageFileUsage",
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+
+if ($data_errors) {
+   print "UNKNOWN - Could not retrieve all required data. $data_errors";
+   exit $ERRORS{'UNKNOWN'};
+} else {
+   # at this point we can assume that we have all the data we need stored in @collected_data
+   $collected_data[0][0]{'_FreeMB'}=$collected_data[0][0]{'AllocatedBaseSize'}-$collected_data[0][0]{'CurrentUsage'};
+   $collected_data[0][0]{'_PeakFreeMB'}=$collected_data[0][0]{'AllocatedBaseSize'}-$collected_data[0][0]{'PeakUsage'};
+   $collected_data[0][0]{'_Used%'}=sprintf("%.0f",$collected_data[0][0]{'CurrentUsage'}/$collected_data[0][0]{'AllocatedBaseSize'}*100);
+   $collected_data[0][0]{'_PeakUsed%'}=sprintf("%.0f",$collected_data[0][0]{'PeakUsage'}/$collected_data[0][0]{'AllocatedBaseSize'}*100);
+   $collected_data[0][0]{'_Free%'}=sprintf("%.0f",$collected_data[0][0]{'_FreeMB'}/$collected_data[0][0]{'AllocatedBaseSize'}*100);
+   $collected_data[0][0]{'_PeakFree%'}=sprintf("%.0f",$collected_data[0][0]{'_PeakFreeMB'}/$collected_data[0][0]{'AllocatedBaseSize'}*100);
+   $collected_data[0][0]{'_Used'}=$collected_data[0][0]{'CurrentUsage'}*$actual_bytefactor*$actual_bytefactor;
+   $collected_data[0][0]{'_PeakUsed'}=$collected_data[0][0]{'PeakUsage'}*$actual_bytefactor*$actual_bytefactor;
+   $collected_data[0][0]{'_Free'}=$collected_data[0][0]{'_FreeMB'}*$actual_bytefactor*$actual_bytefactor;
+   $collected_data[0][0]{'_PeakFree'}=$collected_data[0][0]{'_PeakFreeMB'}*$actual_bytefactor*$actual_bytefactor;
+   $collected_data[0][0]{'_Total'}=$collected_data[0][0]{'AllocatedBaseSize'}*$actual_bytefactor*$actual_bytefactor;
+
+   if ($the_arguments{'_arg1'}=~/auto/) {
+      # automatically set warning and critical levels
+      # to do this we need to retrieve the users settings for page file size, initial size and maximum size
+      # warning at 100% of initial size, critical at 80% of maximum size
+      my @config_data;
+      my $data_errors=get_multiple_wmi_samples(1,
+         "Select InitialSize,MaximumSize from Win32_PageFileSetting",
+         '','',\@config_data,\$the_arguments{'_delay'},undef,0);
+      $debug && print "Automatically setting warning and critical levels\n";
+      if ($data_errors) {
+         # could not get values to set levels
+      } elsif ($config_data[0][0]{'InitialSize'} && $config_data[0][0]{'MaximumSize'}) {
+         # set the warn and criticals - overwriting anything else passed in on the command line
+         # have to convert figures from MB to bytes and we test against the calculated field _Used
+         $opt_warn=[ "_Used=" . ($config_data[0][0]{'InitialSize'}*$actual_bytefactor*$actual_bytefactor) ];
+         $opt_critical=[ "_Used=" . (0.8*$config_data[0][0]{'MaximumSize'}*$actual_bytefactor*$actual_bytefactor) ];
+         $debug && print "Setting levels (using Initial:$config_data[0][0]{'InitialSize'} and Max:$config_data[0][0]{'MaximumSize'}) to " . Dumper($opt_warn,$opt_critical);
+      } else {
+         # query returned but with no data
+         $debug && print "WMI Query returned no data\n";
+      }
+   }
+   
+   my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[0][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
+      
+   my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[0][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
+   print $this_combined_data;
+   exit $test_result;
+}
+  
+}#-------------------------------------------------------------------------
 sub checkfileage {
 # initial idea from steav on github.com
 # its a good idea and we modified to for our use using our programming techniques and 
