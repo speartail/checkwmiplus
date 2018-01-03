@@ -41,7 +41,7 @@ my $conf_file='/opt/nagios/bin/plugins/check_wmi_plus.conf';
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.53";
+my $VERSION="1.54";
 
 # we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
 use lib "/usr/lib/nagios/plugins";
@@ -52,37 +52,38 @@ use Scalar::Util qw(looks_like_number);
 use Number::Format qw(:subs);
 
 # command line option declarations
-my $opt_auth_file='';
-my $opt_Version='';
-my $opt_help='';
-my $opt_mode='';
-my $opt_submode='';
-my $opt_username='';
-my $opt_password='';
-my $opt_wminamespace='root/cimv2'; # this is the default namespace
-my $opt_warn=(); # this becomes an array reference
-my $opt_critical=(); # this becomes an array reference
-my @opt_include_data=(); # this becomes an array reference
-my @opt_exclude_data=(); # this becomes an array reference
-my @opt_extra_wmic_args=(); # extra arguments to pass to wmic
-my $debug=0; # default value
-my $opt_value='';
-my $opt_z='';
-my $opt_inihelp='';
-my $opt_package='';
-my $opt_keep_state=1;
-my $opt_keep_state_id='';
-my $opt_keep_state_expiry='3600'; # default number of seconds after which keep state results are considered expired
-my $opt_join_state_expiry='3600'; # default number of seconds after which join state results are considered expired
-my $opt_texthelp=0;
-my $opt_command_examples='';
-my $opt_ignore_versions='';
-my $opt_ignore_auth_file_warnings='';
+our  $opt_auth_file='';
+our  $opt_Version='';
+our  $opt_help='';
+our  $opt_mode='';
+our  $opt_submode='';
+our  $opt_username='';
+our  $opt_password='';
+our  $opt_wminamespace='root/cimv2'; # this is the default namespace
+our  $opt_warn=(); # this becomes an array reference
+our  $opt_critical=(); # this becomes an array reference
+our  @opt_include_data=(); # this becomes an array reference
+our  @opt_exclude_data=(); # this becomes an array reference
+our  @opt_extra_wmic_args=(); # extra arguments to pass to wmic
+our  $debug=0; # default value
+our  $opt_value='';
+our  $opt_z='';
+our  $opt_inihelp='';
+our  $opt_package='';
+our  $opt_keep_state=1;
+our  $opt_keep_state_id='';
+our  $opt_keep_state_expiry='3600'; # default number of seconds after which keep state results are considered expired
+our  $opt_join_state_expiry='3600'; # default number of seconds after which join state results are considered expired
+our  $opt_texthelp=0;
+our  $opt_command_examples='';
+our  $opt_ignore_versions='';
+our  $opt_ignore_auth_file_warnings='';
+our  $opt_installmodule_dir='';
 
 # they all start with _ since later they are copied into the data array/hash and this reduces the chance they clash
 # then we have consistent usage throughout
 my %the_original_arguments=(); # used to store the original user specified command line arguments  - sometimes we change the arguments
-my %the_arguments = (
+our %the_arguments = (
    _arg1  => '',
    _arg2  => '',
    _arg3  => '',
@@ -97,16 +98,14 @@ my %the_arguments = (
    _timeout     => '',
 );
 
-my ($wmi_commandline, $output);
-
 # arrays/hashes where we will store information about warn/critical specs/checks
 my %warn_perf_specs_parsed;      # list of parsed warn specs - a hash
 my %critical_perf_specs_parsed;  # list of parsed critical specs - a hash
 my @warn_spec_result_list;        # list of warn spec results
 my @critical_spec_result_list;    # list of critical spec results
 
-my $wmic_delimiter='|';
-my $wmic_split_delimiter='\|';
+our $wmic_delimiter='|';
+our $wmic_split_delimiter='\|';
 
 # key is the full name of the Module Version variable
 # value is the minimum module version we'd like to use
@@ -156,13 +155,18 @@ our $wmi_ini_file='';
 our $wmi_ini_dir="$base_dir/check_wmi_plus.d";
 
 # set the location of temporary directory - used for keep state option
-our $tmp_dir='/tmp';
+# if running on Windows then $ENV{'TMP'} will be set and hence used
+our $tmp_dir=$ENV{"TMP"} || '/tmp';
 
 # this script helps with making the manpage help. By default it is in the same directory as the plugin itself
 our $make_manpage_script="$base_dir/check_wmi_plus.makeman.sh";
 
 # this is the directory where the manpage is stored when created, defaults to the same directory as the ini files
 our $manpage_dir="$wmi_ini_dir";
+
+# force the use of the wmic command line binary. Set to 1 to force
+# this is used if you have the wmiclient library installed but want to use the command line version
+our $force_wmic_command=0;
 
 # ---------------------- OTHER CONFIGURATION -------------------------
 
@@ -176,8 +180,12 @@ our $ignore_my_outdated_perl_module_versions=0;
 
 # ============================= END OF DEFAULT CONFIGURATION ================================
 
-
-
+our $host_os='';
+eval {
+   # get the Config module if it is available (so we can get the ostype)
+   require Config;
+   $host_os = $Config::Config{'osname'};
+};
 
 # try and open the conf file to get any user set variables
 # if it does not work, just ignore and carry on
@@ -308,7 +316,7 @@ my %display_fields = (
    checkcpuq         => [ '_DisplayMsg||~|~| - ||', '_AvgCPUQLen||Average CPU Queue Length| | ||', '_arg1| points|~|~|~|(| with', '_delay| sec delay|~| | ||', '_CPUQPoints||~|~|~|gives values: |)' ],
    checkdnsrecords   => [ '_DisplayMsg||~|~| - ||', '_DNSDetails||~|~|~||. ', '_WMIDetails||~|~|~||. ' ],
    checkdrivesize    => [ '_DisplayMsg||~|~| - ||', 'DiskDisplayName||~|~| ||', '_DriveSizeGB|GB|Total||||', '_UsedGB|GB|Used|| ||', '_Used%|%|~|~||(|)', '_FreeGB|GB|Free|| ||', '_Free%|%|~|~||(|)' ],
-   checkeventlog     => [ '_DisplayMsg||~|~| - ||', '_ItemCount| event(s)|~|~| ||', '_SeverityType||~|~||of at least Severity Level "|"', '_arg3| hours|~|~|~|were recorded in the last |', '_arg1||~|~|~| from the | Event Log.', "_EventList||~|~|~||" ],
+   checkeventlog     => [ '_DisplayMsg||~|~| - ||', '_ItemCount| event(s)|~|~| ||', '_SeverityType||~|~||of Severity Level: "|"', '_arg3| hours|~|~|~|were recorded in the last |', '_arg1||~|~|~| from the | Event Log.', "_EventList||~|~|~||" ],
    checkfileage      => [ '_DisplayMsg||~|~| - ||', '_arg1||Age of File| |~|| is ', '_NicelyFormattedFileAge||~|~|~|| or ', '_DisplayFileAge||~|~|~||', '_PerfDataUnit||~|~|||(s).' ], 
    checkfilesize     => [ '_DisplayMsg||~|~| - ||', '_arg1||File| |~|| is ', 'FileSize|#B|~|~|. ||', '_ItemCount| instance(s)|Found| |.||' ], 
    checkfoldersize   => [ '_DisplayMsg||~|~| - ||', '_arg1||Folder| |~|| is ', '_FolderSize|#B|~|~|. ||', '_ItemCount| files(s)|Found| |.||', '_FileList||~|~|~||' ], 
@@ -378,6 +386,14 @@ if ($ARGV[$#ARGV]) {
    $ARGV[$#ARGV]=~s/\r$//;
 }
 
+if ($host_os =~ m/win32$/i) {
+   # if running on Windows we have to remove any ' from the start and end of all command line arguments
+   # For windows, the ' is not used to delimit a string, the " is used instead.
+   for (my $i=0;$i<=$#ARGV;$i++) {
+      $ARGV[$i] =~s/^\'(.*)\'$/$1/;
+   }
+}
+
 Getopt::Long::Configure('no_ignore_case');
 GetOptions(
    "Authenticationfile=s"  => \$opt_auth_file,
@@ -387,6 +403,7 @@ GetOptions(
    "debug+"                => \$debug,
    "excludedata=s@"        => \@opt_exclude_data,
    "extrawmicargs=s@"      => \@opt_extra_wmic_args,
+   "forcewmiccommand"      => \$force_wmic_command,
    "help"                  => \$opt_help,
    "Hostname=s"            => \$the_arguments{'_host'},
    "iexamples=s"           => \$opt_command_examples,
@@ -397,6 +414,7 @@ GetOptions(
    "inidir=s"              => \$wmi_ini_dir,
    "inifile=s"             => \$wmi_ini_file,
    "inihelp"               => \$opt_inihelp,
+   "installmoduledir"      => \$opt_installmodule_dir,
    "ipackage"              => \$opt_package,
    "itexthelp"             => \$opt_texthelp,
    "joinexpiry=s"          => \$opt_join_state_expiry,
@@ -421,6 +439,32 @@ GetOptions(
    "3arg=s"                => \$the_arguments{'_arg3'},
    "4arg=s"                => \$the_arguments{'_arg4'},
    );
+
+if ($opt_installmodule_dir) {
+   # look for a nagios looking path in the @INC
+   # if there is one, link the perl module to that dir
+   # if not tell the user to pick another one themselves
+   my $install_dir='';
+   foreach my $inc_path (@INC) {
+      if ($inc_path=~/nagios|icinga/i) {
+         $install_dir=$inc_path;
+         last;
+      }
+   }
+   if ($install_dir) {
+      print "Linking the Plus Module to $install_dir\n";
+      `ln -s "$wmi_ini_dir/check_wmi_plus_lib.pl" "$install_dir"`;
+      # check its ok
+      if ( ! -l "$install_dir/check_wmi_plus_lib.pl") {
+         print "Could not successfully link the Plus Module!\n";
+         $install_dir='';
+      }
+   }
+   if (! $install_dir) {
+      print "Could not automatically find a suitable directory to install the module to.\nCopy or link the Plus Module to one of the following directories:\n" . join(", ",@INC);
+   }
+   exit 1;
+}
 
 if ($opt_package) {
    my $tarfile="check_wmi_plus.v$VERSION.tar.gz";
@@ -487,6 +531,14 @@ if ($debug) {
    }
 }
 
+# see if the check_wmi_plus_lib module is available
+our $use_wmilib='';
+eval {
+   do ("$conf_file_dir/check_wmi_plus_lib.pl");
+   init_plus_module();
+   $debug && print "Plus Lib is present\n";
+};
+
 if ($opt_command_examples) {
    show_command_examples("$wmi_ini_dir/$command_examples_ini_file{$opt_command_examples}");
    exit 0;
@@ -513,7 +565,7 @@ if ($the_arguments{'_timeout'}) {
 }
 # Setup the trap for a timeout
 $SIG{'ALRM'} = sub {
-   print "UNKNOWN - Plugin Timed out ($TIMEOUT sec)\n";
+   print "UNKNOWN - Plugin Timed out ($TIMEOUT sec). There are multiple possible reasons for this, some of them include - The host $the_arguments{_host} might just be really busy, it might not even be running Windows.\n";
    exit $ERRORS{"UNKNOWN"};
 };
 alarm($TIMEOUT);
@@ -525,6 +577,11 @@ if ($the_arguments{'_bytefactor'}) {
    }
 }
 my $actual_bytefactor=$the_arguments{'_bytefactor'} || $default_bytefactor;
+# store the original specified command line bytefactor for later use (we need it for checknetwork)
+$the_arguments{'_savedbytefactor'}=$the_arguments{'_bytefactor'} || '';
+# reload the arguments hash bytefactor setting with the actual value used
+# this allows use to substitute it into custom calculation fields
+$the_arguments{'_bytefactor'}=$actual_bytefactor;
 
 if ($opt_help || $opt_texthelp) {
    usage();
@@ -927,7 +984,7 @@ sub short_usage {
 my ($no_exit)=@_;
 print <<EOT;
 Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-w WARN] [-c CRIT]
-Full Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp]
+Full Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand]
 EOT
 if (!$no_exit) {
    print "Help as a Manpage: --help\nHelp as Text: --itexthelp\n";
@@ -994,7 +1051,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--includedata DATASPEC] [--excludedata DATASPEC] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--includedata DATASPEC] [--excludedata DATASPEC] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp] [--forcewmiccommand]
  
  Help as a Manpage:  
  
@@ -1085,6 +1142,8 @@ LESS COMMONLY USED OPTIONS
  -z  Provide full specification warning and critical values for performance data. Not all performance data processing software can handle this eg PNP4Nagios.
  
  -d  Enable debug. Use this to see a lot more of what is going on including the exact WMI Query and results. User/passwords should be masked in the resulting output unless -z is specified.
+ 
+ --forcewmiccommand  Force the use of the wmic binary instead of using the WMI Client library. The WMI Client library is used automatically (since it is faster) if it is available on the host running check_wmi_plus. You can tell if you are using the library or the binary wmic by examining the output of -d.
 
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc.
@@ -1219,10 +1278,16 @@ checkdrivesize
       $field_lists{'checkdrivesize'}.
 
 checkeventlog  
-   ARG1  Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer". You may also use a comma delimited list to specify multiple event logs. You can also specify event log names using the wildcard character % eg system,app%,%shell%.
-      Default is system
-   ARG2  Severity Number, 2 = warning 1 = error. Other levels you may wish to use include 3 = Information, 4 = Security Audit Success and 5 = Security Audit Failure. The plugin shows all severity levels less than and equal to the one chosen.
-      Default is 1.
+   ARG1  Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer". You may also use a comma delimited list to specify multiple event logs. You can also specify event log names using the wildcard character % eg system,app%,%shell%. Default is system
+   ARG2  A comma delimited list of severity numbers. If not specfied this defaults to 1. If only one level is specified, all severity levels less than and equal to it are included. If more than one is specified then only those levels are included. To include only a single level, put a comma before the severity number eg ,3.
+   
+       The severity levels available are:  
+       5 = Security Audit Failure.
+       4 = Security Audit Success
+       3 = Information
+       2 = Warning
+       1 = Error
+   
    ARG3  Number of past hours to check for events. Default is 1
    ARG4  Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
       ie use the eventdefault section settings from the ini file. The ini file contains regular expression based inclusion
@@ -1231,18 +1296,26 @@ checkeventlog
       $field_lists{'checkeventlog'}.
 
    Examples:  
-      to report all errors that got logged in the past 24 hours in the System event log use:
+      to report all errors (1) that got logged in the past 24 hours in the System event log use:
       
       -a System -3 24
       
-      to report all errors that got logged in the past 24 hours in any event log use:
+      to report all errors (1) that got logged in the past 24 hours in any event log use:
       
       -a % -3 24
 
-      to report all warnings and errors that got logged in the past 4 hours in the Application event log use:
+      to report all warnings (2) and errors (1) that got logged in the past 4 hours in the Application event log use:
       
-      -a application -o 2 -3 4
+      -a application -o 2 -3 4 OR -a application -o 1,2 -3 4
       
+      to report all information (3) and errors (1) that got logged in the past 4 hours in the Application event log use:
+      
+      -a application -o 1,3 -3 4
+      
+      to report only Security Audit Failure (5) events that got logged in the past 4 hours in any event log use:
+      
+      -a % -o ,5 -3 4
+
       to report your custom mix of event log messages from the system event log use (the names passed to this argument are ini sections defined in an ini file eg event.ini):
       
       -4 eventinc_1,eventinc_2,eventinc_3,eventexclude_1
@@ -1396,6 +1469,7 @@ checkuptime
       Typically you would specify something like -w 20min: -c 10min: (to if less than 20 min and critical if less than 10 min)
 
 checkvolsize  
+   This can be used to monitor volumes mounted as junction points (ie no drive letters) as well as normal logical volumes.
    Also see checkdrivesize
    ARG1  drive letter or volume name or volume label of the volume to check. If omitted a list of valid drives will be shown. If set to . all drives will be included.
       To include multiple volumes separate them with a |. This uses a regular expression so take care to
@@ -1472,6 +1546,16 @@ if ($incoming ne '' && looks_like_number($incoming)) {
 }
 #-------------------------------------------------------------------------
 sub get_multiple_wmi_samples {
+# wrapper sub for getting wmi data 
+if ($use_wmilib) {
+   # use the one from the Plus Module
+   return get_wmi_data_with_lib(@_);
+} else {
+   return get_wmi_data(@_);
+}
+}
+#-------------------------------------------------------------------------
+sub get_wmi_data {
 # perform the same WMI query 1 or more times with a time delay in between and return the results in an array
 # good for using RAW performance data and gives me a standard way to perform queries and have the results loaded into a known structure
 # pass in
@@ -1511,6 +1595,9 @@ my ($num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$resu
 # we will also ensure fields provided by this sub are in that index also eg _ChecksOK, _QuerySum etc
 my $final_data_array_index=0;
 
+# put both the command line and wmiclient library arguments into this array
+my @wmi_args=();
+
 # extract parameters from arguments
 if ($$specified_delay) {
    if ($$specified_delay ge 0) {
@@ -1548,9 +1635,8 @@ if ($slash_conversion) {
 # "SELECT * From rootdse" --namespace=root/directory/ldap
 # check delimiter
 # if it is not | then add it to the command line
-my $alt_delim='';
 if ($wmic_delimiter ne '|') {
-   $alt_delim=" --delimiter='$wmic_delimiter'";
+   push(@wmi_args,'--delimiter',"$wmic_delimiter");
 }
 
 # build up the extra wmic arguments if defined
@@ -1561,17 +1647,26 @@ if ($#opt_extra_wmic_args>=0) {
    # So --option=#client ntlmv2 auth#=Yes becomes --option="client ntlmv2 auth"=Yes
    $extra_wmic_arguments=join(' ',@opt_extra_wmic_args);
    $extra_wmic_arguments=~s/#/"/g;
+   # not sure if this will work when using the wmiclient library
+   push(@wmi_args,$extra_wmic_arguments);
    $debug && print "Extra Wmic Arguments specified:$extra_wmic_arguments\n";
+}
+
+my $wmi_query_quote="'";
+if ($host_os =~ m/win32$/i) {
+   # if running on Windows we need to deal with the ' in the query and change the command line to quote it using \"
+   $wmi_query=~s/\"/\\\"/g;
+   $wmi_query_quote='"';
 }
 
 # if user name/password specified they always override the auth file
 if ($opt_username && $opt_password) {
-   $wmi_commandline = "$wmic_command$alt_delim --namespace $wmi_namespace $extra_wmic_arguments -U '${opt_username}%${opt_password}' //$the_arguments{'_host'} '$wmi_query'";
+   push(@wmi_args,'-U',"${opt_username}%${opt_password}");
 } elsif ($opt_auth_file) {
    # quick check on the auth file
    if (-s -r $opt_auth_file || $opt_ignore_auth_file_warnings) {
       # now set up the auth file command line
-      $wmi_commandline = "$wmic_command$alt_delim --namespace $wmi_namespace $extra_wmic_arguments -A '$opt_auth_file' //$the_arguments{'_host'} '$wmi_query'";
+      push(@wmi_args,'-A',$opt_auth_file);
    } else {
       print "The Authentication File \"$opt_auth_file\" either does not exist, can not be accessed or is empty. You need this to allow $wmic_command to authenticate to the Windows machine. See --help for information on the file requirements. You can ignore this warning and proceed, passing the file to wmic by specifying the --IgnoreAuthFileWarnings argument. If the file really does have access problems wmic will not work either and may fail in a not so nice way eg hang on waiting for STDIN.\n";
       if ($debug) {
@@ -1594,6 +1689,18 @@ if ($opt_username && $opt_password) {
       exit $ERRORS{'UNKNOWN'};
    }
 }
+
+# now add the namespace, hostname and query arguments
+push(@wmi_args,'--namespace',$wmi_namespace);
+push(@wmi_args,"//$the_arguments{'_host'}");
+push(@wmi_args,"$wmi_query");
+
+# create wmi command line using the parameters in the array
+my $output='';
+
+# set up the command line
+# enclose all parameters in the apprpriate host_os based quote character
+my $wmi_commandline = "$wmic_command $wmi_query_quote" . join("$wmi_query_quote $wmi_query_quote",@wmi_args) . $wmi_query_quote;
 
 my $all_output=''; # this holds information if any errors are encountered
 
@@ -1702,7 +1809,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
       # mask the user name and password in the wmic command, but not if $opt_z is set
       my $cmd=$wmi_commandline;
       if (! $opt_z) {
-         $cmd=~s/-U (.*?)%(.*?) /-U USER%PASS /;
+      $cmd=~s/-U$wmi_query_quote $wmi_query_quote(.*?)%(.*?)$wmi_query_quote /-U${wmi_query_quote} ${wmi_query_quote}USER%PASS${wmi_query_quote} /;
       }
       print "Round #" . ($i+1) . " of $num_samples\n";
       print "QUERY: $cmd\n";
@@ -1839,10 +1946,14 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   
                   # check that the row data looks valid
                   # to be valid
-                  # 1) the row should have the same number of fields as the header row (there have been reports that the CLASS: line repeats throughout the content
+                  # 1) the row should have the same number of fields (it can be up to only 1 field less) as the header row (there have been reports that the CLASS: line repeats throughout the content
                   # 2) the row should not be the same as the header row (there have been reports that the header row sometimes repeats throughout the content)
                   # If we are using $value_regex to find the fields then all that goes out the window and we have to assume it is ok
-                  if ( ($#field_data==$last_header_field_number && $row_data ne $header_row_content) || $value_regex) {
+                  # we allow it to be up to one field less because in some cases if the row data is like
+                  # 1|2|3| and the 4th field is empty, the split actually only returns an array with 3 elements instead of 4
+                  # checkdrivesize with drives that do not have volume names have this problem
+                  # so to fix this the field count should be the same as the header row or only one less
+                  if ( ($last_header_field_number-$#field_data<=1 && $row_data ne $header_row_content) || $value_regex) {
                      my $header_field_number=0;
                      my $data_field_number=1; # these ones start from 1 since it makes it easier for the user to define - take care
                      $debug && print "FIELDS (via Split):";
@@ -1906,7 +2017,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   # increment the results counter for this query
                   $found++;
                } else {
-                  $debug && print "Probably an invalid row because $#field_data==$last_header_field_number && $row_data ne $header_row_content\n";
+                  $debug && print "Probably an invalid row. Valid row test is $last_header_field_number-$#field_data<=1 && $row_data ne $header_row_content\n";
                }
             }
             # record the number of rows found for this query
@@ -2875,25 +2986,31 @@ sub check_for_data_errors {
 my ($data_errors)=@_;
 if ($data_errors) {
    print "UNKNOWN - The WMI query had problems.";
-   if ($data_errors=~/access denied/i) {
+   if ($data_errors=~/NT_STATUS_ACCESS_DENIED/i) {
       my $extra_msg='';
       if ($opt_auth_file) {
          $extra_msg=" Your Authentication File might be incorrectly formatted or inaccessible. ";
       }
       print " You might have your username/password wrong or the user's access level is too low. ${extra_msg}Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/Retrieve result data/i) {
-      print " The target host ($the_arguments{_host}) might not have the required WMI classes installed. This can happen, for example, if you are trying to checkiis but IIS is not installed. It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/0x80041010/i) {
+      print " The target host ($the_arguments{_host}) might not have the required WMI classes installed. This can happen, for example, if you are trying to checkiis but IIS is not installed. It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes the WMI service is not running, other times a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/0x8007000e/i) { 
+      print " We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of services. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x8004100e/i) { 
       # this error message looks like
       # ERROR: Login to remote object.
       # NTSTATUS: NT code 0x8004100e - NT code 0x8004100e
       print " The target host ($the_arguments{_host}) might not have the required WMI namespace. This can happen if you are trying to run a check that is only supported on newer versions of Windows eg checkpower only works on Server 2008 and above - the entire namespace required for that check is missing in older versions of Windows. Other causes include mistyping the WMI namesspace. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_IO_TIMEOUT/i) {
-      print " The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Is $the_arguments{_host} the correct hostname?. The host might even by up but just too busy. Wmic error text on the next line.\n";
+      print " The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Is $the_arguments{_host} the correct hostname?. The host might even be up but just too busy. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_HOST_UNREACHABLE/i) {
       print " The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Looks like a valid name/IP Address. $the_arguments{_host} is probably not even pingable. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/NT status.*?c00000c4/i) {
+   } elsif ($data_errors=~/NT_STATUS_UNEXPECTED_NETWORK_ERROR/i) {
       print " This error has been reported when your DNS lookup configuration is not quite right. $the_arguments{_host} might be using a FQDN and/or you have no 'search' setting in your /etc/resolv.conf file. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/NT_STATUS_CONNECTION_REFUSED/i) {
+      print " The target host ($the_arguments{_host}) did not allow our network connection. It is a valid name/IP Address. A firewall might be blocking us. There might be some critical services not running. Is it even running Windows?  Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/^.{0,5}TIMEOUT.{0,5}$/i) {
+      print " The WMI Client Library timed out. There are multiple possible reasons for this, some of them include - The host $the_arguments{_host} might just be really busy, it might not even be running Windows. Error text on the next line.\n";
    } else {
       print " The error text from wmic is: ";
    }
@@ -3409,7 +3526,8 @@ my $performance_data='';
 
 # for network stuff we often want $actual_bytefactor to be 1000
 # so lets use that unless the user has set something else
-if (!$the_arguments{'_bytefactor'}) {
+# check the saved bytefactor argument value
+if (!$the_arguments{'_savedbytefactor'}) {
    $actual_bytefactor=1000;
 }
 
@@ -4053,6 +4171,7 @@ if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}==0) {
    print "OK - WSUS Database clean.\n";
    exit $ERRORS{'OK'};
 } else {
+   my $output;
    $output =~ s/\r(Application)\|/Application\|/g;
    $output =~ s/\r//g;
    $output =~ s/\n//g;
@@ -4692,7 +4811,7 @@ if ($results_text) {
 }
 #-------------------------------------------------------------------------
 sub checkeventlog {
-my %severity_level=(
+my %severity_level_descriptions=(
    1  => "Error",
    2  => "Warning",
    3  => "Information",
@@ -4724,9 +4843,41 @@ foreach my $logfile (@logfile_list) {
 $logfile_wherebit=~s/ OR $//;
 
 # severity level
-if (!exists($severity_level{$the_arguments{'_arg2'}})) {
-   $the_arguments{'_arg2'}=1;
+# arg2 can be just a single number or a comma delimited list of numbers
+my @severity_levels=split(/,/,$the_arguments{'_arg2'});
+my $severity_wherebit='';
+my $severity_display='';
+# special cases for zero specified, 1 specified and more than 1 specified
+if ($#severity_levels==-1) {
+   # nothing specified, set the default value, errors (1)
+   $severity_wherebit='EventType<=1 and EventType>0';
+   $severity_display=$severity_level_descriptions{1};
+} elsif ($#severity_levels==0) {
+   # a single level specified
+   # we take this level and display this level and all levels below it
+   $severity_wherebit="EventType<=$severity_levels[0] and EventType>0";
+   # in the display list all the levels from the one specified to level 1
+   for (my $i=1;$i<=$severity_levels[0];$i++) {
+      $severity_display.="$severity_level_descriptions{$i},";
+   }
+} else {
+   # more than one specified, we only want to display the event levels listed
+   foreach my $slevel (@severity_levels) {
+      if (looks_like_number($slevel)) {
+         $severity_wherebit.=" EventType=$slevel or";
+         $severity_display.="$severity_level_descriptions{$slevel},";
+      }
+   }
+   # remove the last " or" from the wherebit
+   $severity_wherebit=~s/ or$//;
+   
+   # put brackets around the where part since it uses "OR"
+   $severity_wherebit="($severity_wherebit)";
 }
+
+# remove the last , from the severity display
+$severity_display=~s/,$//;
+
 
 # number of past hours to check
 if (!$the_arguments{'_arg3'}) {
@@ -4749,7 +4900,7 @@ my @collected_data;
 #Logfile|Message|RecordNumber|SourceName|TimeGenerated|Type
 #System|Printer 5D PDF Creator (from MATTHEW) was deleted.|101949|Print|20110521153921.000000+600|warning
 my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
-   "Select EventIdentifier,Type,LogFile,SourceName,Message,TimeGenerated from Win32_NTLogEvent where ( $logfile_wherebit ) and EventType<=$the_arguments{'_arg2'} and EventType>0 and $where_time_part",
+   "Select EventIdentifier,Type,LogFile,SourceName,Message,TimeGenerated from Win32_NTLogEvent where ( $logfile_wherebit ) and $severity_wherebit and $where_time_part",
    '','(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\n',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 check_for_data_errors($data_errors);
@@ -4758,11 +4909,11 @@ my @newdata=process_event_clusions($the_arguments{'_arg4'},\@{$collected_data[$l
 # @newdata will totally replace the wmi data from the query, so we need to do it and then update _ItemCount
 $collected_data[$last_wmi_data_index]=\@newdata;
 
-$collected_data[$last_wmi_data_index][0]{'_SeverityType'}=$severity_level{$the_arguments{'_arg2'}};
+$collected_data[$last_wmi_data_index][0]{'_SeverityType'}=$severity_display;
 $collected_data[$last_wmi_data_index][0]{'_EventList'}='';
 
 if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}>0) {
-   $collected_data[$last_wmi_data_index][0]{'_EventList'}=" (List is on next line. Fields shown are - Logfile:TimeGenerated:EventId:Type:SourceName:Message)\n" . list_collected_values_from_all_rows(\@collected_data,['Logfile','TimeGenerated','EventIdentifier','Type','SourceName','Message'],"\n",':',0);;
+   $collected_data[$last_wmi_data_index][0]{'_EventList'}=" (List is on next line. Fields shown are - Logfile:TimeGenerated:SeverityLevel:EventId:Type:SourceName:Message)\n" . list_collected_values_from_all_rows(\@collected_data,['Logfile','TimeGenerated','EventIdentifier','Type','SourceName','Message'],"\n",':',0);;
 }
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
@@ -5134,7 +5285,7 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
    $new_data[0]{'_ItemCount'}=$#new_data+1;
 
 } else {
-   $debug && print "No In/Eclusions defined\n";
+   $debug && print "No In/Exclusions defined\n";
    # the new data is the same as the input data
    @new_data=@{$wmidata};
 }

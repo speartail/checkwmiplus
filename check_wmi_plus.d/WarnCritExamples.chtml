@@ -1,6 +1,6 @@
 # This is not a std html or any other kind of file
 # It is used to define some command examples
-# Run check wmi plus with --iexamples=1 to see the output
+# Run check wmi plus with --iexamples=2 to see the output
 # The output is HTML format suitable for use with Drupal
 # You must provide -H, -u and -p on the command line
 # The base command then becomes

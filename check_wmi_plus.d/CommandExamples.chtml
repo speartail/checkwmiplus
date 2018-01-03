@@ -71,7 +71,7 @@ If you take a look at the --help output for checkcpu you can see that the only v
 !TCheck the RAM utilisation
 !A-m checkmem
 
-!TCheck the RAM utilisation, warn if more than 40% utilised, go critical of more than 90%
+!TCheck the RAM utilisation, warn if more than 40% utilised, go critical if more than 90%
 !A-m checkmem -w 40 -c 90
 
 !TCheck the RAM utilisation, warn if less than 70% is free

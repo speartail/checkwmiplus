@@ -37,7 +37,8 @@ $wmi_ini_file=''; # CHANGE THIS IF NEEDED
 $wmi_ini_dir="$base_dir/check_wmi_plus.d"; # CHANGE THIS IF NEEDED,
 
 # set the location of temporary directory - used for keep state option
-$tmp_dir='/tmp'; # CHANGE THIS IF NEEDED
+# if running on Windows then $ENV{'TMP'} will be set and hence used
+$tmp_dir=$ENV{"TMP"} || '/tmp'; # CHANGE THIS IF NEEDED
 
 # this script helps with making the manpage help. By default it is in the same directory as the plugin itself
 $make_manpage_script="$base_dir/check_wmi_plus.makeman.sh"; # CHANGE THIS IF NEEDED
@@ -55,3 +56,6 @@ $manpage_dir="$wmi_ini_dir"; # CHANGE THIS IF NEEDED
 # Setting either this to 1 or the command line option will disable the check
 $ignore_my_outdated_perl_module_versions=0; # CHANGE THIS IF NEEDED
 
+# force the use of the wmic command line binary. Set to 1 to force
+# this is used if you have the wmiclient library installed but want to use the command line version
+$force_wmic_command=0; # CHANGE THIS IF NEEDED

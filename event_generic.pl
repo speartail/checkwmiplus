@@ -21,12 +21,13 @@
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #
 
-my $VERSION="1.02";
+my $VERSION="1.04";
 
 use strict;
 use Getopt::Long;
 
-# uses the following NAGIOS_ environment variables that should be set in the environment for proper execution
+# uses the following NAGIOS_* environment variables that should be set in the environment for proper execution
+# if you are using ICINGA that variables are named ICINGA_*
 #$ENV{'NAGIOS_SERVICESTATE'}='CRITICAL';  # CRITICAL, WARNING, UNKNOWN, OK 
 #$ENV{'NAGIOS_SERVICEATTEMPT'}='1';  # a number
 #$ENV{'NAGIOS_MAXSERVICEATTEMPTS'}='3';  # a number
@@ -54,6 +55,7 @@ my $opt_regex=(); # this becomes an array reference
 my $opt_usefirstregex='';
 my $opt_usefirststatelist='';
 my $opt_test='';
+my $opt_extra_debug='';
 
 # default timeout
 my $TIMEOUT=30;
@@ -77,6 +79,7 @@ GetOptions(
    "usefirstregex"         => \$opt_usefirstregex,
    "usefirststatelist"     => \$opt_usefirststatelist,
    "envtest=s"             => \$opt_test,
+   "xtradebug"             => \$opt_extra_debug,
    );
 
 if ($debug) {
@@ -95,6 +98,7 @@ if ($debug) {
    print localtime(time) ."\n";
    my $command_line=join(' ',@saved_ARGV);
    print "CMD:$0 $command_line\n";
+   $opt_extra_debug && print "Environment Variables: " . Dumper(\%ENV);
 }
 
 if ($opt_test) {
@@ -140,6 +144,7 @@ if ( $#$opt_command<0) {
 
 if ( ! $opt_soft && ! $opt_hard ) {
    # neither hard nor soft specified so default to hard
+   $debug && print "Defaulting to HARD\n";
    $opt_hard=1;
 }
 
@@ -151,13 +156,13 @@ if ($opt_soft && $opt_numbersoft eq 'L') {
 }
 
 # work out if we will execute this command under this NAGIOS_SERVICESTATE and NAGIOS_SERVICEATTEMPT number
-my $nagios_hostname=$ENV{'NAGIOS_HOSTNAME'} || '';
-my $nagios_servicedesc=$ENV{'NAGIOS_SERVICEDESC'} || '';
-my $nagios_servicestate=$ENV{'NAGIOS_SERVICESTATE'} || '';
-my $nagios_serviceattempt=$ENV{'NAGIOS_SERVICEATTEMPT'} || '';
-my $nagios_maxserviceattempts=$ENV{'NAGIOS_MAXSERVICEATTEMPTS'} || '';
-my $nagios_servicestatetype=$ENV{'NAGIOS_SERVICESTATETYPE'} || '';
-my $nagios_serviceoutput=$ENV{'NAGIOS_SERVICEOUTPUT'} || '';
+my $nagios_hostname=$ENV{'NAGIOS_HOSTNAME'} || $ENV{'ICINGA_HOSTNAME'} || '';
+my $nagios_servicedesc=$ENV{'NAGIOS_SERVICEDESC'} || $ENV{'ICINGA_SERVICEDESC'} || '';
+my $nagios_servicestate=$ENV{'NAGIOS_SERVICESTATE'} || $ENV{'ICINGA_SERVICESTATE'} || '';
+my $nagios_serviceattempt=$ENV{'NAGIOS_SERVICEATTEMPT'} || $ENV{'ICINGA_SERVICEATTEMPT'} || '';
+my $nagios_maxserviceattempts=$ENV{'NAGIOS_MAXSERVICEATTEMPTS'} || $ENV{'ICINGA_MAXSERVICEATTEMPTS'} || '';
+my $nagios_servicestatetype=$ENV{'NAGIOS_SERVICESTATETYPE'} || $ENV{'ICINGA_SERVICESTATETYPE'} || '';
+my $nagios_serviceoutput=$ENV{'NAGIOS_SERVICEOUTPUT'} || $ENV{'ICINGA_SERVICEOUTPUT'} || '';
 
 print "HOST=$nagios_hostname, SERVICE=$nagios_servicedesc, STATE=$nagios_servicestate, ATTEMPT $nagios_serviceattempt/$nagios_maxserviceattempts, TYPE=$nagios_servicestatetype, OUTPUT=$nagios_serviceoutput\n";
 
@@ -258,7 +263,7 @@ print<<EOT;
 A generic use, Nagios event handler. Runs a parameter driven command under various Nagios conditions.
 Allows you to fully parameterise your event handlers so that you can simply your Nagios configuration.
 
-Usage: $0 [-s [-n NUM]] [-h] [-l STATELIST] [-d FILE] [-t TIMEOUT] [-r REGEX] [-usefirstregex] [--usefirststatelist] [-e ENVTEST] -c COMMAND
+Usage: $0 [-s [-n NUM]] [-h] [-l STATELIST] [-d FILE] [-t TIMEOUT] [-r REGEX] [-usefirstregex] [--usefirststatelist] [-e ENVTEST] [-x] -c COMMAND
 
 where
 -s          Specifies the command should be run during Nagios SOFT states
@@ -301,6 +306,7 @@ ENVTEST     A pipe delimited string which sets up fake environment variables to 
 
 --usefirstregex       Use the same REGEX for all commands ie the first REGEX defined on the command line
 --usefirststatelist   Use the same STATELIST for all command ie the first STATELIST defined on the command line
+-x          Show extra debug information. Includes all the environment variables in the output. USeful to see all of the Nagios state info.
 
 NOTES:
 ======
