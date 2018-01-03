@@ -39,7 +39,7 @@ my $conf_file='/opt/nagios/bin/plugins/check_wmi_plus.conf';
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.49";
+my $VERSION="1.50";
 
 # we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
 use lib "/usr/lib/nagios/plugins";
@@ -49,6 +49,7 @@ use Getopt::Long;
 use Scalar::Util qw(looks_like_number);
 
 # command line option declarations
+my $opt_auth_file='';
 my $opt_Version='';
 my $opt_help='';
 my $opt_mode='';
@@ -70,6 +71,7 @@ my $opt_keep_state_id='';
 my $opt_keep_state_expiry='3600'; # default number of seconds after which keep state results are considered expired
 my $opt_texthelp=0;
 my $opt_command_examples='';
+my $opt_ignore_versions='';
 
 # they all start with _ since later they are copied into the data array/hash and this reduces the chance they clash
 # then we have consistent usage throughout
@@ -99,6 +101,17 @@ my @critical_spec_result_list;    # list of critical spec results
 
 my $wmic_delimiter='|';
 my $wmic_split_delimiter='\|';
+
+# key is the full name of the Module Version variable
+# value is the minimum module version we'd like to use
+my %good_module_versions=(
+   'DateTime::VERSION',0.66,
+   'Getopt::Long::VERSION',2.38,
+   'Scalar::Util::VERSION',1.22,
+   'Data::Dumper::VERSION',2.125,
+   'Config::IniFiles::VERSION',2.58,
+   'Storable::VERSION',2.22
+   );
 
 #==============================================================================
 #=================================== CONFIG ===================================
@@ -324,40 +337,43 @@ if ($ARGV[$#ARGV]) {
 
 Getopt::Long::Configure('no_ignore_case');
 GetOptions(
-   "arguments=s"        => \$the_arguments{'_arg1'},
-   "bytefactor=s"       => \$the_arguments{'_bytefactor'},
-   "critical=s@"        => \$opt_critical,
-   "debug+"             => \$debug,
-   "excludedata=s@"     => \@opt_exclude_data,
-   "help"               => \$opt_help,
-   "Hostname=s"         => \$the_arguments{'_host'},
-   "iexamples=s"        => \$opt_command_examples,
-   "includedata=s@"     => \@opt_include_data,
-   "inidir=s"           => \$wmi_ini_dir,
-   "inifile=s"          => \$wmi_ini_file,
-   "inihelp"            => \$opt_inihelp,
-   "ipackage"           => \$opt_package,
-   "itexthelp"          => \$opt_texthelp,
-   "keepexpiry=s"       => \$opt_keep_state_expiry,
-   "keepid=s"           => \$opt_keep_state_id,
-   "keepstate!"         => \$opt_keep_state,
-   "mode=s"             => \$opt_mode,
-   "namespace=s"        => \$opt_wminamespace,
-   "nodataexit=s"       => \$the_arguments{'_nodataexit'},
-   "nodatamode"         => \$the_arguments{'_nodatamode'},
-   "nodatastring=s"     => \$the_arguments{'_nodatastring'},
-   "otheraguments=s"    => \$the_arguments{'_arg2'},
-   "password=s"         => \$opt_password,
-   "submode=s"          => \$opt_submode,
-   "timeout=i"          => \$the_arguments{'_timeout'},
-   "username=s"         => \$opt_username,
-   "value=s"            => \$opt_value,
-   "version"            => \$opt_Version,
-   "warning=s@"         => \$opt_warn,
-   "ydelay=s"           => \$the_arguments{'_delay'},
-   "z"                  => \$opt_z,
-   "3arg=s"             => \$the_arguments{'_arg3'},
-   "4arg=s"             => \$the_arguments{'_arg4'},
+   "Authenticationfile=s"  => \$opt_auth_file,
+   "arguments=s"           => \$the_arguments{'_arg1'},
+   "bytefactor=s"          => \$the_arguments{'_bytefactor'},
+   "critical=s@"           => \$opt_critical,
+   "debug+"                => \$debug,
+   "excludedata=s@"        => \@opt_exclude_data,
+   "help"                  => \$opt_help,
+   "Hostname=s"            => \$the_arguments{'_host'},
+   "iexamples=s"           => \$opt_command_examples,
+   "IgnoreMyOutDatedPerlModuleVersions"
+                           => \$opt_ignore_versions,
+   "includedata=s@"        => \@opt_include_data,
+   "inidir=s"              => \$wmi_ini_dir,
+   "inifile=s"             => \$wmi_ini_file,
+   "inihelp"               => \$opt_inihelp,
+   "ipackage"              => \$opt_package,
+   "itexthelp"             => \$opt_texthelp,
+   "keepexpiry=s"          => \$opt_keep_state_expiry,
+   "keepid=s"              => \$opt_keep_state_id,
+   "keepstate!"            => \$opt_keep_state,
+   "mode=s"                => \$opt_mode,
+   "namespace=s"           => \$opt_wminamespace,
+   "nodataexit=s"          => \$the_arguments{'_nodataexit'},
+   "nodatamode"            => \$the_arguments{'_nodatamode'},
+   "nodatastring=s"        => \$the_arguments{'_nodatastring'},
+   "otheraguments=s"       => \$the_arguments{'_arg2'},
+   "password=s"            => \$opt_password,
+   "submode=s"             => \$opt_submode,
+   "timeout=i"             => \$the_arguments{'_timeout'},
+   "username=s"            => \$opt_username,
+   "value=s"               => \$opt_value,
+   "version"               => \$opt_Version,
+   "warning=s@"            => \$opt_warn,
+   "ydelay=s"              => \$the_arguments{'_delay'},
+   "z"                     => \$opt_z,
+   "3arg=s"                => \$the_arguments{'_arg3'},
+   "4arg=s"                => \$the_arguments{'_arg4'},
    );
 
 if ($opt_package) {
@@ -375,6 +391,15 @@ if ($opt_package) {
    print "Created $base_dir/$tarfile\n";
    $output=`cd $base_dir;rm check_wmi_plus.conf.sample`;
    exit 0;
+}
+
+# check module versions as they very often cause problems if older than developed with
+# unless ignored by command line option
+if (!$opt_ignore_versions) {
+   my $versions_ok=check_module_versions(0);
+   if (!$versions_ok) {
+      exit $ERRORS{'UNKNOWN'};
+   }
 }
 
 if ($debug) {
@@ -397,12 +422,7 @@ if ($debug) {
       print "======================================== SYSTEM INFO =====================================================\n";
       print "--------------------- Module Versions ---------------------\n";
       print "Perl Version: $]\n";
-      print "DateTime - $DateTime::VERSION\n";
-      print "Getopt::Long - $Getopt::Long::VERSION\n";
-      print "Scalar::Util - $Scalar::Util::VERSION\n";
-      print "Data::Dumper - $Data::Dumper::VERSION\n";
-      print "Config::IniFiles - $Config::IniFiles::VERSION\n";
-      print "Storable - $Storable::VERSION\n";
+      check_module_versions(1);
       print "Net::DNS - $Net::DNS::VERSION\n";
       print "--------------------- Environment ---------------------\n";
       print "ENV=" . Dumper(\%ENV);
@@ -576,6 +596,37 @@ exit $ERRORS{'OK'};
 #================================== FUNCTIONS =================================
 #==============================================================================
 
+#-------------------------------------------------------------------------
+sub check_module_versions {
+my ($force_show)=@_;
+no strict "refs"; # just turn off strict refs for a little so we can use strings as variables names!
+my $versions_ok=1;
+foreach my $moduleversion (keys %good_module_versions) {
+   # do as little as possible in this loop to make it faster
+   if ($$moduleversion lt $good_module_versions{$moduleversion}) {
+      # found a bad one - jump out of loop
+      $versions_ok=0;
+      last;
+   }
+}
+
+if (!$versions_ok || $force_show) {
+   $versions_ok || print "Warning - one or more of your Perl Modules are out of date and this may cause plugin problems. If you are having any problems with Check WMI Plus you must upgrade your Perl Modules before contacting support (since they'll just tell you to upgrade!). You can override this warning at your peril by using the --IgnoreMyOutDatedPerlModuleVersions command line option. Version Information on the next line.\n";
+   printf("%-19s %19s %7s %-10s\n",'MODULE_NAME','INSTALLED_VERSION','STATUS','DESIRED_VERSION');
+   foreach my $moduleversion (keys %good_module_versions) {
+      my $status='ok';
+      if ($$moduleversion lt $good_module_versions{$moduleversion}) {
+         $status='BAD';
+      }
+      my $module_name=$moduleversion;
+      $module_name=~s/::VERSION$//;
+      printf("%-19s %19s %7s %10s\n",$module_name,$$moduleversion,$status,$good_module_versions{$moduleversion});
+   }
+}
+
+use strict "refs";
+return $versions_ok;
+}
 #-------------------------------------------------------------------------
 sub open_ini_file {
 my $ini_file;
@@ -887,11 +938,11 @@ NAME
 BRIEF
  Typical Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-a ARG1 ] [-w WARN] [-c CRIT]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-w WARN] [-c CRIT]
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--includedata DATASPEC] [--excludedata DATASPEC] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--includedata DATASPEC] [--excludedata DATASPEC] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp]
  
  Help as a Manpage:  
  
@@ -913,10 +964,20 @@ DESCRIPTION
 REQUIRED OPTIONS
  -H HOSTNAME  specify the name or IP Address of the host that you want to check
  
+You must specifiy a username/password/domain in one of two ways. The use of -u DOMAIN/USER -p PASSWORD always overrides the values contained in -A AUTHFILE
  -u DOMAIN/USER  specify the DOMAIN (optional) and USER that has permission to execute WMI queries on HOSTNAME
  
  -p PASSWORD  the PASSWORD for USER
  
+ -A AUTHFILE  the full path to an authentication file. The file is passed directly to $wmic_command. Check WMI PLus does not read the file and hence you must get the file format as required by $wmic_command. You can override the settings in this file by using -u DOMAIN/USER -p PASSWORD.
+
+       Authentication File format is
+         username=USERNAME  
+         password=PASSWORD  
+         domain=DOMAIN  
+
+       Set your own values for USERNAME, PASSWORD and DOMAIN. DOMAIN may be nothing.
+
  -m MODE  the check mode. The list of valid MODEs and a description is shown below
 
 COMMONLY USED OPTIONS
@@ -1375,7 +1436,19 @@ if ($wmic_delimiter ne '|') {
    $alt_delim=" --delimiter='$wmic_delimiter'";
 }
 
-$wmi_commandline = "$wmic_command$alt_delim --namespace $opt_wminamespace -U '${opt_username}%${opt_password}' //$the_arguments{'_host'} '$wmi_query'";
+# if user name/password specified they always override the auth file
+if ($opt_username && $opt_password) {
+   $wmi_commandline = "$wmic_command$alt_delim --namespace $opt_wminamespace -U '${opt_username}%${opt_password}' //$the_arguments{'_host'} '$wmi_query'";
+} elsif ($opt_auth_file) {
+   # quick check on the auth file
+   if (-s -r $opt_auth_file) {
+      # now set up the auth file command line
+      $wmi_commandline = "$wmic_command$alt_delim --namespace $opt_wminamespace -A '$opt_auth_file' //$the_arguments{'_host'} '$wmi_query'";
+   } else {
+      print "The Authentication File \"$opt_auth_file\" either does not exist, can not be accessed or is empty. You need this to allow $wmic_command to authenticate to the Windows machine. See --help for information on the file requirements.\n";
+      exit $ERRORS{'UNKNOWN'};
+   }
+}
 
 my $all_output=''; # this holds information if any errors are encountered
 
@@ -2434,22 +2507,25 @@ if ($process_each_row eq '0') {
 
 $debug && print "customfield definitions in this section: " . Dumper($list);
 foreach my $item (@{$list}) {
-   $debug && print "Creating Custom Field for $item\n";
-   # the format of this field is
-   # NEWFIELDNAME,FUNCTION,FUNCTIONPARAMETERS
-   # where FUNCTIONPARAMETERS itself is a comma delimited list
-   # we want to split it into the 3 fields
-   if ($item=~/(.*?),(.*?),(.*)/) {
-      # $1 is the NEWFIELDNAME
-      # $2 is the FUNCTION
-      # $3 is the FUNCTIONPARAMETERS
-      
-      # look at query number $last_wmi_data_index and then process each row in that query
-      for (my $i=0;$i<=$num_rows_in_last_wmi_result;$i++) {
-         calc_new_field($1,$2,$3,$wmidata,$last_wmi_data_index,$i);
+   # old version of config::inifiles set the array to a single undefined value - we have to test for it
+   if (defined($item)) {
+      $debug && print "Creating Custom Field for $item\n";
+      # the format of this field is
+      # NEWFIELDNAME,FUNCTION,FUNCTIONPARAMETERS
+      # where FUNCTIONPARAMETERS itself is a comma delimited list
+      # we want to split it into the 3 fields
+      if ($item=~/(.*?),(.*?),(.*)/) {
+         # $1 is the NEWFIELDNAME
+         # $2 is the FUNCTION
+         # $3 is the FUNCTIONPARAMETERS
+         
+         # look at query number $last_wmi_data_index and then process each row in that query
+         for (my $i=0;$i<=$num_rows_in_last_wmi_result;$i++) {
+            calc_new_field($1,$2,$3,$wmidata,$last_wmi_data_index,$i);
+         }
+      } else {
+         print "WARNING: Could not correctly parse \"customfield\" definition in ini file: $item (for $opt_mode)\n";
       }
-   } else {
-      print "WARNING: Could not correctly parse \"customfield\" definition in ini file: $item (for $opt_mode)\n";
    }
 }
 }
@@ -2464,24 +2540,27 @@ my ($list,$wmidata,$last_wmi_data_index)=@_;
 
 $debug && print "createlist definitions in this section: " . Dumper($list);
 foreach my $item (@{$list}) {
-   $debug && print "Creating Custom List for $item\n";
-   # the format of this field is
-   #      1           2         3         4          5
-   # NEWFIELDNAME|LINEDELIM|FIELDDELIM|UNIQUE|FIELD1,FIELD2,etc
-   # we want to split it into the fields
-   if ($item=~/^(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)$/) {
-      # $5 must be turned into an array
-      my $newfield=$1;
-      my $linedelim=$2;
-      my $fielddelim=$3;
-      my $unique=$4;
-      my $sourcefields=$5;
-      my @fieldlist=split(',',$sourcefields);
-      #print "$newfield,$linedelim,$fielddelim,$unique and $sourcefields=" . Dumper(\@fieldlist);
-      $$wmidata[$last_wmi_data_index][0]{$newfield}=list_collected_values_from_all_rows($wmidata,\@fieldlist,$linedelim,$fielddelim,$unique);
-      #print "   Set to: $$wmidata[$last_wmi_data_index][0]{$newfield}\n";
-   } else {
-      print "WARNING: Could not correctly parse \"createlist\" definition in ini file: $item (for $opt_mode)\n";
+   # old version of config::inifiles set the array to a single undefined value - we have to test for it
+   if (defined($item)) {
+      $debug && print "Creating Custom List for $item\n";
+      # the format of this field is
+      #      1           2         3         4          5
+      # NEWFIELDNAME|LINEDELIM|FIELDDELIM|UNIQUE|FIELD1,FIELD2,etc
+      # we want to split it into the fields
+      if ($item=~/^(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)$/) {
+         # $5 must be turned into an array
+         my $newfield=$1;
+         my $linedelim=$2;
+         my $fielddelim=$3;
+         my $unique=$4;
+         my $sourcefields=$5;
+         my @fieldlist=split(',',$sourcefields);
+         #print "$newfield,$linedelim,$fielddelim,$unique and $sourcefields=" . Dumper(\@fieldlist);
+         $$wmidata[$last_wmi_data_index][0]{$newfield}=list_collected_values_from_all_rows($wmidata,\@fieldlist,$linedelim,$fielddelim,$unique);
+         #print "   Set to: $$wmidata[$last_wmi_data_index][0]{$newfield}\n";
+      } else {
+         print "WARNING: Could not correctly parse \"createlist\" definition in ini file: $item (for $opt_mode)\n";
+      }
    }
 }
 }
@@ -2493,7 +2572,7 @@ my ($data_errors)=@_;
 if ($data_errors) {
    print "UNKNOWN - ";
    if ($data_errors=~/Permission denied/i) {
-      print "Permission denied when trying to store the state data. Sometimes this happens if you have been testing the plugin from the command line as a different user to the Nagio process user. You will need to change the permissions on the file or remove it. ";
+      print "Permission denied when trying to store the state data. Sometimes this happens if you have been testing the plugin from the command line as a different user to the Nagios process user. You will need to change the permissions on the file or remove it. ";
    } else {
       print "There was an error while trying to store the state data. ";
    }
@@ -2509,9 +2588,13 @@ my ($data_errors)=@_;
 if ($data_errors) {
    print "UNKNOWN - The WMI query had problems.";
    if ($data_errors=~/access denied/i) {
-      print " You might have your username/password wrong or the user's access level is too low. Wmic error text on the next line.\n";
+      my $extra_msg='';
+      if ($opt_auth_file) {
+         $extra_msg=" Your Authentication File might be incorrectly formatted or inaccessible. ";
+      }
+      print " You might have your username/password wrong or the user's access level is too low. ${extra_msg}Wmic error text on the next line.\n";
    } elsif ($data_errors=~/Retrieve result data/i) {
-      print " The target host ($the_arguments{_host}) might not have the required WMI classes installed. This can happen, for example, if you are trying to checkiis but IIS is not installed. It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
+      print " The target host ($the_arguments{_host}) might not have the required WMI classes installed. This can happen, for example, if you are trying to checkiis but IIS is not installed. It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x8004100e/i) { 
       # this error message looks like
       # ERROR: Login to remote object.
@@ -2548,52 +2631,55 @@ if ($#$specifications>=0) {
    $debug && print "################# Looking to perform data clusions Mode=$include_mode_text{$include_mode} ################# \n";
    $debug && print "WMI DATA BEFORE:" . Dumper($wmidata);
    foreach my $clusion_spec (@{$specifications}) {
-      $debug && print "Looking to $include_mode_text{$include_mode} data matching: $clusion_spec\n";
-
-      my $inclusions_for_this_spec=0;
-      my $exclusions_for_this_spec=0;
+      # old version of config::inifiles set the array to a single undefined value - we have to test for it
+      if (defined($clusion_spec)) {
+         $debug && print "Looking to $include_mode_text{$include_mode} data matching: $clusion_spec\n";
    
-      # Now loop through the rows of data in the last WMI query
-      # we only need to look at the last wmi query since this is the row that contains all the data we will user for display/test/perf data
-      # we only need to delete any excluded data from the last row since everything is driven from this row and it does not matter if we leave old info behind in the other WMI queries
-      # the loop through the wmi data goes inside the spec loop since if all data is removed then checks on other specs will go faster since there is no data to check
-      my $row=0;
-      foreach my $wmiquerydata (@{$$wmidata[$last_wmi_data_index]}) {
-         $debug && print "-------- Looking at Row #$row " . Dumper($wmiquerydata);
-         my ($result,$perf,$display,$test_field)=parse_limits($clusion_spec,$wmiquerydata);
-         my $include_this_data=0; # the default position is to exclude the data, we change this to 1 when we want to keep the data
-         if ($result) {
-            $debug && print " --- Range Specification was met\n";
-            # criteria is triggered so we know that the data mets the range criteria
-            if ($include_mode) {
-               # we are including data and this data met the requirement so we have to include it
-               $include_this_data=1;
+         my $inclusions_for_this_spec=0;
+         my $exclusions_for_this_spec=0;
+      
+         # Now loop through the rows of data in the last WMI query
+         # we only need to look at the last wmi query since this is the row that contains all the data we will user for display/test/perf data
+         # we only need to delete any excluded data from the last row since everything is driven from this row and it does not matter if we leave old info behind in the other WMI queries
+         # the loop through the wmi data goes inside the spec loop since if all data is removed then checks on other specs will go faster since there is no data to check
+         my $row=0;
+         foreach my $wmiquerydata (@{$$wmidata[$last_wmi_data_index]}) {
+            $debug && print "-------- Looking at Row #$row " . Dumper($wmiquerydata);
+            my ($result,$perf,$display,$test_field)=parse_limits($clusion_spec,$wmiquerydata);
+            my $include_this_data=0; # the default position is to exclude the data, we change this to 1 when we want to keep the data
+            if ($result) {
+               $debug && print " --- Range Specification was met\n";
+               # criteria is triggered so we know that the data mets the range criteria
+               if ($include_mode) {
+                  # we are including data and this data met the requirement so we have to include it
+                  $include_this_data=1;
+               }
+            } else {
+               $debug && print " --- Range Specification was NOT met\n";
+               # criteria is not met
+               if (!$include_mode) { # ie if excluding then ....
+                  # we are excluding data and this one did not met the requirements for exclusion so include it
+                  $include_this_data=1;
+               }
             }
-         } else {
-            $debug && print " --- Range Specification was NOT met\n";
-            # criteria is not met
-            if (!$include_mode) { # ie if excluding then ....
-               # we are excluding data and this one did not met the requirements for exclusion so include it
-               $include_this_data=1;
+                  
+            if ($include_this_data) {
+               $debug && print "******** Including this row of data\n";
+               push(@new_wmi_query_data,$wmiquerydata);
+               # we also have to keep the equivalent row from the first wmi query
+               push(@new_first_wmi_query_data,$$wmidata[0][$row]);
+               $inclusions_for_this_spec++;
+            } else {
+               $exclusions_for_this_spec++;
+               $debug && print "******** NOT including this row of data\n";
             }
+            $row++;
          }
-               
-         if ($include_this_data) {
-            $debug && print "******** Including this row of data\n";
-            push(@new_wmi_query_data,$wmiquerydata);
-            # we also have to keep the equivalent row from the first wmi query
-            push(@new_first_wmi_query_data,$$wmidata[0][$row]);
-            $inclusions_for_this_spec++;
-         } else {
-            $exclusions_for_this_spec++;
-            $debug && print "******** NOT including this row of data\n";
-         }
-         $row++;
+   
+         $num_exclusions+=$exclusions_for_this_spec;
+         $num_inclusions+=$inclusions_for_this_spec;
+         $debug && print "-------- There were $inclusions_for_this_spec inclusions and $exclusions_for_this_spec exclusions for this specification\n";
       }
-
-      $num_exclusions+=$exclusions_for_this_spec;
-      $num_inclusions+=$inclusions_for_this_spec;
-      $debug && print "-------- There were $inclusions_for_this_spec inclusions and $exclusions_for_this_spec exclusions for this specification\n";
    }
 
    check_for_and_fix_row_zero(\@new_wmi_query_data,\%{$$wmidata[$last_wmi_data_index][0]});
