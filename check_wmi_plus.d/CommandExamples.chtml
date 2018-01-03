@@ -77,14 +77,14 @@ If you take a look at the --help output for checkcpu you can see that the only v
 !TCheck the RAM utilisation, warn if less than 70% is free
 !A-m checkmem -w _MemFree%=70:
 
-!TList valid network adapters for checknetwork (the example one shown in the output is valid for your system)
+!TList valid network adapters for checknetwork
 !A-m checknetwork
 
-!TCheck the network stats for the 'Intel[R] PRO_1000 MT Network Connection' adapter (might not be valid for your system).
-!A-m checknetwork -a 'Intel[R] PRO_1000 MT Network Connection'
+!TCheck the network stats for the 'LAN0' interface (might not be valid for your system).
+!A-m checknetwork -a LAN0
 
-!TCheck the size of the page file using automatic warning and critical settings
-!A-m checkpage -a auto
+!TCheck the size of all page files using automatic warning and critical settings
+!A-m checkpage -a auto -o .
 
 !TCheck for all the processes whose Name matches svchost
 !A-m checkprocess -a svchost
@@ -100,6 +100,9 @@ If you take a look at the --help output for checkcpu you can see that the only v
 
 !TCheck all services with the string 'windows' in the short or long name
 !A-m checkservice -a windows
+
+!TCheck SMART status of all drives on the system.
+!A-m checksmart -H gold
 
 !TCheck all services with the string 'windows' in the short or long name, exclude any that have 'audio' in them
 !A-m checkservice -a windows -o audio
@@ -121,7 +124,7 @@ Only some of the checks from the ini files have been included. There are lots mo
 !TCheck utilisation of each CPU, rather than just the overall total, warn if any of them goes above 5% utilisation
 !A-m checkeachcpu -w 5
 
-!TList Exchange DB Instances
+!TList Exchange DB Instances (needs at least Information Store and Transport services running)
 !A-m checkexchange -s listDBInstances
 
 !TCheck Exchange stats for any database name ending in _Total
@@ -142,7 +145,7 @@ Only some of the checks from the ini files have been included. There are lots mo
 !TCheck the IO of the physical drive C: (may be different to the logical C:)
 !A-m checkio -s physical -a c:
 
-!TCheck the printer spooler, warn if OutofPaperErrors>0
+!TCheck the printer spooler, warn if OutofPaperErrors>0 (There are no printer servers running on this test machine!)
 !A-m checkprint -s spooler -w OutofPaperErrors=0
 
 !TCheck CPU utilisation for some SQL server processes, warn if utilisation is more than 10% or if there are more than 2 processes
@@ -152,13 +155,13 @@ Only some of the checks from the ini files have been included. There are lots mo
 !A-m checkproc -s cpuabove -a %serv% -w 50 -w _ItemCount=2
 
 !TList the SQL Express DB Instances
-!A-m checksqlex -s listdb
+!A-m checksql -s listdb -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS
 
-!TCheck SQL Express cache stats for all cache types (use checksql for SQL Server)
-!A-m checksqlex -s cache -a _total
+!TCheck SQL Express cache stats totals (use a different value for -a for SQL Server)
+!A-m checksql -s cache -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS
 
-!TCheck SQL Express latch stats (use checksql for SQL Server)
-!A-m checksqlex -s latches
+!TCheck SQL Express latch stats (use a different value for -a for SQL Server)
+!A-m checksql -s latches -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS
 
 !TCheck the numbers of Terminal Services sessions
 !A-m checkts -s sessions

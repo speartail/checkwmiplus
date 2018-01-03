@@ -1,4 +1,4 @@
-check_wmi_plus v1.50
+check_wmi_plus v1.51
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -11,7 +11,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--includedata DATASPEC] [--excludedata DATASPEC] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--includedata DATASPEC] [--excludedata DATASPEC] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp]
  
  Help as a Manpage:  
  
@@ -83,6 +83,8 @@ LESS COMMONLY USED OPTIONS
 
  --namespace WMINAMESPACE  Specify the WMI Namespace. eg root/MicrosoftDfs. The default is root/cimv2. Use '/' (forward slash) instead of '\\' (backslash).
 
+ --extrawmicarg EXTRAWMICARG  Specify additional arguments to be passed to the wmic command. The arguments are passed directly and must be complete and understood by wmic. In order to assist with escaping of quotes, all # are translated to ". To pass --option="client ntlmv2 auth"=Yes to wmic specifiy --extrawmicarg "--option=#client ntlmv2 auth#=Yes". This option can be specified multiple times to pass multiple arguments to wmic.
+
  --inihelp  Show the help from the INIFILE for the specified MODE/SUBMODE. If specified without MODE/SUBMODE, this shows a quick short summary of all valid MODE/SUBMODEs in the ini files.
  
  --inifile=INIFILE  INIFILE is the full path of an ini file to use. The use of --inidir is preferred over this option.
@@ -94,6 +96,8 @@ LESS COMMONLY USED OPTIONS
  --keepexpiry KEXPIRY  KEXPIRY is the number of seconds after which the plugin assumes that the previously collected data has expired. The default is 3600 sec. You should run your plugin more frequently than this value or set KEXPIRY higher.
  
  --keepid KID  KID is a unique identifier. This is normally not needed. In order to keep state between plugin runs, the data is written to a file. In order to stop collisions between different plugin runs, and hence incorrect calculations,  the filename is unique based on the checkmode, hostname, arguments passed etc. If for some reason these are not sufficient and you are experiencing collisions, you can add a unique KID to each plugin check to ensure uniqueness.
+ 
+ --joinexpiry JEXPIRY  JEXPIRY is the number of seconds after which the plugin assumes that the previously collected join data has expired. The default is 3600 sec. Join data that is defined as being reasonably static by whomever created the check will only get refreshed every JEXPIRY seconds.
  
  -z  Provide full specification warning and critical values for performance data. Not all performance data processing software can handle this eg PNP4Nagios.
  
@@ -230,6 +234,8 @@ checkdrivesize
    ARG3  Set this to 1 to include information about the sum of all disk space on the entire system.
       If you set this you can also check warn/crit against the overall disk space.
       To show only the overall disk, set ARG3 to 1 and set ARG1 to 1 (actually to any non-existant disk)
+      Eg -o 1 -3 1
+
    WARN/CRIT  can be used as described below.
       Valid Warning/Critical Fields are: _Used% (Default), _UsedGB, _Free%, _FreeGB.
 
@@ -254,7 +260,7 @@ checkeventlog
       
       -a application -o 2 -3 4
       
-      to report your custom mix of event log messages from the system event log use:
+      to report your custom mix of event log messages from the system event log use (the names passed to this argument are ini sections defined in an ini file eg event.ini):
       
       -4 eventinc_1,eventinc_2,eventinc_3,eventexclude_1
 
@@ -303,15 +309,18 @@ checkmem
 checknetwork  
    These network checks use WMI Raw counters to calculate values over a given timeperiod. 
    This is much more accurate than taking Formatted WMI values.
-   ARG1  Specify with network adapter the stats are collected for.
-      The name of the network adaptors as seen from WMI are similar to what is seen in the output of the 
-      ipconfig/all command on Windows. However, its not exactly the same. Run without -a to list the adapter
-      names according to WMI. Typically you need to use '' around the adapter name when specifying.
-      eg -a 'Intel[R] PRO_1000 T Server Adapter _2 - Packet Scheduler Miniport'
+   ARG1  Specify the network interface the stats are collected for.  If set to . all interfaces will be included.
+      To include multiple interfaces separate them with a | or specify a common identifier eg part of an IP Address or MAC Address. This uses a regular expression so take care to
+      specify exactly what you want. eg "LAN0" or "192.168.0.1" or "192.168.0" or "LAN0|LAN2" or "." or "08:00:27:85:CE:6D" or "08:00:27"
+      To specify a network interface you can use either the Connection Name (as seen in Control Panel), IP Address (IPv4 or IPV6) or MAC Address. You can also use the name of the network adaptors as seen from WMI which is similar to what is seen in the output of the ipconfig/all command on Windows. However, it is not exactly the same and can be tricky since this uses a regular expression. Run without -a to show the interface
+      names, IP Addresses, MAC Addresses. Typically you need to use '' around the adapter name when specifying.
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate.
    WARN/CRIT  can be used as described below.
       Valid Warning/Critical Fields are: CurrentBandwidth (Default), _PacketsSentPersec, _PacketsReceivedPersec, OutputQueueLength, PacketsReceivedErrors, _BytesSentPersec, _BytesReceivedPersec
    BYTEFACTOR  defaults to 1000 for this mode. You can override this if you wish.
+
+   Note:  
+      This check does up to 3 WMI queries so it may be slow. You might need to use the -t option. Since 2 of the WMI queries are relatively static, their results are cached and you can set the refresh period for this data using --joinexpiry.
    
 checkpage  
    This mode checks the amount of page file usage.
@@ -319,10 +328,20 @@ checkpage
    ARG1  Set this to "auto" to automatically set warning/critical levels. The warning level is set to the same as the
       inital size of the page file. The critical level is set to 80% of the maximum page file size.
       If set, it is used instead of any command line specification of warning/critical settings.
-      Note: The separate WMI query to obtain the additional information required to use this setting does not
-      always work eg it does not work on our test Windows Server 2008 instance (it might on yours).
+      Note: The separate WMI query to obtain the additional information required to use this setting only works if you have set a custom size for your page files. If they are set to "System Managed", this will not work. You can tell if an automatic warning/critical level has been set by examining the performance data for the "Used" value. In this example - "'E:/pagefile.sys Used'=41943040Bytes;104857600;167772160;" you can tell that the levels have been automatically set because there are 3 numeric values in the performance data - the last 2 are the warning and critical levels.
+   ARG2  drive letter page to check. If omitted a list of valid page files will be shown. If set to . all page files will be included.
+      To include multiple drives separate them with a |. This uses a regular expression so take care to
+      specify exactly what you want. eg "C:" or "C:|E:" or "."
+   ARG3  Set this to 1 to include information about the sum of all pages file on the entire system.
+      If you set this you can also check warn/crit against the overall disk space.
+      To show only the overall page file info, set ARG3 to 1 and set ARG2 to 1 (actually to any non-existant disk)
+      Eg -o 1 -3 1
+
    WARN/CRIT  can be used as described below.
    Valid Warning/Critical Fields are: _Used% (Default), _Used, _Free, _Free%, _PeakUsed%, _PeakUsed, _PeakFree, _PeakFree%, _Total.
+
+   Note:  
+      This check does up to 2 WMI queries (if -a auto is used) so it may be slow. You might need to use the -t option. Since 1 of the WMI queries is relatively static, its results are cached and you can set the refresh period for this data using --joinexpiry.
 
 checkprocess  
    SUBMODE  Set this to Name, ExecutablePath, or Commandline to determine if ARG1 and ARG3 matches against just the
@@ -352,6 +371,34 @@ checkservice
       This exclusion list is applied after the inclusion list.
    WARN/CRIT  can be used as described below.
       Valid Warning/Critical Fields are: _NumBad (Default), _NumGood, _NumExcluded, _Total
+
+   Note:  
+      A "Good" service is one that is Started, its State is Running and its Status is OK. Anything else is considered "Bad". If you don't want certain services include in this count then you will need to exclude them with -o ARG2
+
+checksmart  
+   Check the SMART status of all hard drives on the system. Will only work for physical drives (ie not on disks in a virtual machine!). Probably will not work for disk array drives as they are not normally presented to the system as disks. Reports if any drives are failing the SMART checks which signals
+      imminent hard drive failure. It also grab various SMART attributes such as temperature. It also grab the disk serial
+      number which may work on OS versions above Win XP and Win Server 2003.
+   ARG1  (optional) By default checksmart shows all of a small set of SMART attributes as peformance data. If you want to reduce this list you can by specifying a comma delimited list of attribute codes. Specify ARG1 as 'none' to obtain no SMART attributes. This will actually remove one of the WMI queries. Specify ARG1 as 'list' to list all the valid attribute codes. If you wish to warn/critical against the temperature value you must at least specify that code (194).
+
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _DiskFailing (Default), _ItemCount, Temperature
+
+   Note:  
+      This check does up to 4 WMI queries so it may be slow. You might need to use the -t option. Since 2 of the WMI queries are relatively static, their results are cached and you can set the refresh period for this data using --joinexpiry.
+
+   Examples:  
+      Warn if more than zero drives fail the SMART check or if any of the disk temperatures are above 40 degrees Celcius.
+      
+      -m checksmart -w 0 -w Temperature=40
+      
+      List only the SMART temperature
+      
+      -m checksmart -a 194
+      
+      List Temperature and Power on Hours
+      
+      -m checksmart -a 194,9
 
 checkuptime  
    WARN/CRIT  can be used as described below.
@@ -388,7 +435,7 @@ INI FILE HELP SUMMARY
 
  checkad, replication (-m checkad -s replication)  
    Check the full replication of an Active Directory. Tested with AD v2003. Shows the number of failed replicas.
-   Use --nodatamode and/or NODATAEXIT settings to control what happens if no failed replicas are found. 
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no failed replicas are found. 
    Developed and tested by Patrick Fratczak. Typically run with -c 0, to go critical when any failed replicas are found.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
@@ -396,7 +443,7 @@ INI FILE HELP SUMMARY
  checkdhcp, stats (-m checkdhcp -s stats)  
    Checks various stats for Microsoft Windows Server running as an IPv4 DHCP Server
    Tested for Windows Server 2003/2008 R2. Only tested on a low volume server.
-   You may want to use --nodatamode so that you can control how the plugin responds when no data is returned by the WMI query.
+   Note:  You may want to use --nodatamode so that you can control how the plugin responds when no data is returned by the WMI query.
 
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
 
@@ -413,20 +460,24 @@ INI FILE HELP SUMMARY
  checkdns, arecords (-m checkdns -s arecords)  
    Shows the number of DNS A records defined.
    Tested for Windows Server 2003/2008 R2. Only tested on a low volume server.
+   ARG1  (optional) Specify a ContainerName (normally seen as a domain name) to restrict the search to
+   Note:  You may want to use --nodatamode so that you can control how the plugin responds when no data is returned by the WMI query.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
 
  checkdns, cnamerecords (-m checkdns -s cnamerecords)  
    Shows the number of DNS CNAME records defined.
    Tested for Windows Server 2003/2008 R2. Only tested on a low volume server.
-   You may want to use --nodatamode so that you can control how the plugin responds when no data is returned by the WMI query.
+   ARG1  (optional) Specify a ContainerName (normally seen as a domain name) to restrict the search to
+   Note:  You may want to use --nodatamode so that you can control how the plugin responds when no data is returned by the WMI query.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
 
  checkdns, ptrrecords (-m checkdns -s ptrrecords)  
    Shows the number of DNS PTR records defined.
    Tested for Windows Server 2003/2008 R2. Only tested on a low volume server.
-   You may want to use --nodatamode so that you can control how the plugin responds when no data is returned by the WMI query.
+   ARG1  (optional) Specify a ContainerName (normally seen as a domain name) to restrict the search to
+   Note:  You may want to use --nodatamode so that you can control how the plugin responds when no data is returned by the WMI query.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
 
@@ -649,11 +700,22 @@ INI FILE HELP SUMMARY
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _BytesPrintedPersec (Default), JobErrors, Jobs, JobsSpooling, NotReadyErrors, OutofPaperErrors, TotalJobsPrinted, TotalPagesPrinted
 
+ checkprint, test (-m checkprint -s test)  
+   Demo check for join= and qoinquery= settings.
+   Grabs the same information as checkprinter spooler but adds a couple of extra fields from another WMI Class. 
+   ARG1  The printer queue name to view stats for. Use _Total for the total stats for all print queues.
+   Use % for wildcards. The printer queue name can be seen in the Device and Printer screen
+   eg "Microsoft XPS Document Writer", "%laser%".
+
+   DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
+
+   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _BytesPrintedPersec (Default), JobErrors, Jobs, JobsSpooling, NotReadyErrors, OutofPaperErrors, TotalJobsPrinted, TotalPagesPrinted
+
  checkproc, cmdline (-m checkproc -s cmdline)  
    An ini implementation similar to checkprocess. 
    ARG1  The exact command line to search for. Use / instead of \\.
    e.g. C:/WINDOWS/system32/services.exe.
-   Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
 
@@ -665,7 +727,7 @@ INI FILE HELP SUMMARY
    such as Windows 2008 Server, have them numbered eg svchost#1, svchost#2, svchost#3. To get all svchost processes you
    need to set ARG1 to svchost%
    To view all processes set ARG1 to "%" and the full process list will be included in the plugin output.
-   Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
 
@@ -677,7 +739,7 @@ INI FILE HELP SUMMARY
    such as Windows 2008 Server, have them numbered eg svchost#1, svchost#2, svchost#3. To get all svchost processes you
    need to set ARG1 to svchost%
    To view all processes set ARG1 to "%" and the full process list will be included in the plugin output.
-   Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
 
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
 
@@ -692,7 +754,7 @@ INI FILE HELP SUMMARY
    such as Windows 2008 Server, have them numbered eg svchost#1, svchost#2, svchost#3. To get all svchost processes you
    need to set ARG1 to svchost%
    To view all processes set ARG1 to "%" and the full process list will be included in the plugin output.
-   Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
 
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
 
@@ -706,19 +768,26 @@ INI FILE HELP SUMMARY
    such as Windows 2008 Server, have them numbered eg svchost#1, svchost#2, svchost#3. To get all svchost processes you
    need to set ARG1 to svchost%
    To view all processes set ARG1 to "%" and the full process list will be included in the plugin output.
-   Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default), _ColSum_PrivateBytes, _ColSum_WorkingSet, _ColSum_VirtualBytes
 
  checkserv, byname (-m checkserv -s byname)  
    An ini implementation similar to checkservice. This uses a WMI query that may perform faster on busy systems.
    ARG1  The DisplayName or Name of the service to search for. Use % for wildcards.
-   Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
 
  checksql, buffermanager (-m checksql -s buffermanager)  
    Check SQL Server Buffer Manager. Tested for Microsoft SQL Server 2008.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
 
@@ -726,14 +795,28 @@ INI FILE HELP SUMMARY
 
  checksql, cache (-m checksql -s cache)  
    SQL Server Cache Statistics. Tested for Microsoft SQL Server 2008. Only tested on a low volume server.
-   ARG1  The cache type to view stats for. Use _Total for the total stats for the total of all cache.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   ARG2  The cache type to view stats for. Use _Total for the total stats for the total of all cache (this is the default).
    Use % for wildcards. Use only a single % to include stats for all cache types.
    Use the helper check checksqlex listcache to list valid cache names.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: CacheHitRatio (Default), CacheObjectCounts, CacheObjectsinuse, CachePages
 
  checksql, general (-m checksql -s general)  
    General SQL Server Statistics. Tested for Microsoft SQL Server 2008. Only tested on a low volume server.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
 
@@ -741,6 +824,13 @@ INI FILE HELP SUMMARY
 
  checksql, latches (-m checksql -s latches)  
    SQL Server Latch and SuperLatch Statistics. Tested for Microsoft SQL Server 2008. Only tested on a low volume server.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
 
@@ -748,24 +838,52 @@ INI FILE HELP SUMMARY
 
  checksql, listcache (-m checksql -s listcache)  
    List all cache types in a SQL Server instance. This is just a helper check.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    WARN/CRIT  Not used for this MODE.
 
  checksql, listdb (-m checksql -s listdb)  
    List all DBs in a SQL Server database. This is just a helper check.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
 
  checksql, listlocks (-m checksql -s listlocks)  
    List all lock types in a SQL Server instance. This is just a helper check.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    WARN/CRIT  Not used for this MODE.
 
  checksql, locks (-m checksql -s locks)  
    SQL Server Lock Statistics. Tested for Microsoft SQL Server 2008. Only tested on a low volume server.
-   ARG1  The lock type to view stats for. Use _Total for the total stats for the total of all locks.
-   Use % for wildcards. Use only a single % to include stats for all locks.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   ARG2  (optional) The lock type to view stats for. Use _Total for the total stats for the total of all locks.
+   Use % for wildcards. Use only a single % to include stats for all locks. The default value for this is _Total.
    Use the helper check checksqlex listlocks to list valid lock names.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
 
@@ -773,11 +891,25 @@ INI FILE HELP SUMMARY
 
  checksql, memory (-m checksql -s memory)  
    SQL Server Memory Statistics. Tested for Microsoft SQL Server 2008. Only tested on a low volume server.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ConnectionMemory (Default), LockBlocks, LockBlocksAllocated, _LockMemory, LockOwnerBlocks, LockOwnerBlocksAllocated, _MaximumWorkspaceMemory, MemoryGrantsOutstanding, MemoryGrantsPending, _OptimizerMemory, _SQLCacheMemory, _TargetServerMemory, _TotalServerMemory
 
  checksql, sqlstats (-m checksql -s sqlstats)  
    SQL Server SQL Statistics. Tested for Microsoft SQL Server 2008. Only tested on a low volume server.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
 
@@ -785,77 +917,13 @@ INI FILE HELP SUMMARY
 
  checksql, waits (-m checksql -s waits)  
    SQL Server Wait Statistics. This only shows Average Wait time in milliseconds. You could modify this check to show other wait types eg Waits in Progress. Tested for Microsoft SQL Server 2008. Only tested on a low volume server.
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: Lockwaits (Default), Logbufferwaits, Logwritewaits, Memorygrantqueuewaits, NetworkIOwaits, NonPagelatchwaits, PageIOlatchwaits, Pagelatchwaits, Threadsafememoryobjectswaits, Transactionownershipwaits, Waitfortheworker, Workspacesynchronizationwaits
-
- checksqlex, buffermanager (-m checksqlex -s buffermanager)  
-   Check SQL EXPRESS Buffer Manager. Tested for Microsoft SQL EXPRESS 2008.
-
-   DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: Buffercachehitratio (Default), _CheckpointpagesPersec, Databasepages, _FreeliststallsPersec, Freepages, _LazywritesPersec, Pagelifeexpectancy, _PagelookupsPersec, _PagereadsPersec, _PagewritesPersec, _ReadaheadpagesPersec, Reservedpages, Stolenpages, Targetpages, Totalpages
-
- checksqlex, cache (-m checksqlex -s cache)  
-   SQL EXPRESS Cache Statistics. Tested for Microsoft SQL EXPRESS 2008. Only tested on a low volume server.
-   ARG1  The cache type to view stats for. Use _Total for the total stats for the total of all cache.
-   Use % for wildcards. Use only a single % to include stats for all cache types.
-   Use the helper check checksqlex listcache to list valid cache names.
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: CacheHitRatio (Default), CacheObjectCounts, CacheObjectsinuse, CachePages
-
- checksqlex, general (-m checksqlex -s general)  
-   General SQL EXPRESS Statistics. Tested for Microsoft SQL EXPRESS 2008. Only tested on a low volume server.
-
-   DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: ActiveTempTables (Default), _LoginsPersec, _LogoutsPersec, LogicalConnections, Processesblocked, _TempTablesCreationRate, UserConnections
-
- checksqlex, latches (-m checksqlex -s latches)  
-   SQL EXPRESS Latch and SuperLatch Statistics. Tested for Microsoft SQL EXPRESS 2008. Only tested on a low volume server.
-
-   DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: AverageLatchWaitTimems (Default), _LatchWaitsPersec, NumberofSuperLatches, _SuperLatchDemotionsPersec, _SuperLatchPromotionsPersec, TotalLatchWaitTimems
-
- checksqlex, listcache (-m checksqlex -s listcache)  
-   List all cache types in a SQL EXPRESS instance. This is just a helper check.
-
-   WARN/CRIT  Not used for this MODE.
-
- checksqlex, listdb (-m checksqlex -s listdb)  
-   List all DBs in a SQL EXPRESS database. This is just a helper check.
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
-
- checksqlex, listlocks (-m checksqlex -s listlocks)  
-   List all lock types in a SQL EXPRESS instance. This is just a helper check.
-
-   WARN/CRIT  Not used for this MODE.
-
- checksqlex, locks (-m checksqlex -s locks)  
-   SQL EXPRESS Lock Statistics. Tested for Microsoft SQL EXPRESS 2008. Only tested on a low volume server.
-   ARG1  The lock type to view stats for. Use _Total for the total stats for the total of all locks.
-   Use % for wildcards. Use only a single % to include stats for all locks.
-   Use the helper check checksqlex listlocks to list valid lock names.
-
-   DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: AverageWaitTimems (Default), _LockRequestsPersec, _LockTimeoutstimeout0Persec, _LockWaitsPersec, LockWaitTimems, _NumberofDeadlocksPersec
-
- checksqlex, memory (-m checksqlex -s memory)  
-   SQL EXPRESS Memory Statistics. Tested for Microsoft SQL EXPRESS 2008. Only tested on a low volume server.
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ConnectionMemory (Default), LockBlocks, LockBlocksAllocated, _LockMemory, LockOwnerBlocks, LockOwnerBlocksAllocated, _MaximumWorkspaceMemory, MemoryGrantsOutstanding, MemoryGrantsPending, _OptimizerMemory, _SQLCacheMemory, _TargetServerMemory, _TotalServerMemory
-
- checksqlex, sqlstats (-m checksqlex -s sqlstats)  
-   SQL EXPRESS SQL Statistics. Tested for Microsoft SQL EXPRESS 2008. Only tested on a low volume server.
-
-   DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
-
-   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _BatchRequestsPersec (Default), _FailedAutoParamsPersec, _ForcedParameterizationsPersec, _GuidedplanexecutionsPersec, _MisguidedplanexecutionsPersec, _SafeAutoParamsPersec, _SQLAttentionrate, _SQLCompilationsPersec, _SQLReCompilationsPersec, _UnsafeAutoParamsPersec
-
- checksqlex, waits (-m checksqlex -s waits)  
-   SQL EXPRESS Wait Statistics. This only shows Average Wait time in milliseconds. You could modify this check to show other wait types eg Waits in Progress. Tested for Microsoft SQL EXPRESS 2008. Only tested on a low volume server.
+   ARG1  (optional) Specify an non-default SQL Instance Name. You actually specify part of the WMI Class name but see below for more info. The default setting for this is MSSQLSERVER_SQLSERVER. If you specify this as "default" then the default value will be used. This can simplify your Nagios configuration by allowing you to have a single commmand definition.
+   Selecting an Instance:  
+   The WMI Class name is built up from the SQL instance name. For the default SQL Instance name, part of the WMI Class is MSSQLSERVER_SQLSERVER. It's a guess at the moment but the SQL Instance name for that WMI Class is probably SQL_SERVER. For SQL Express the part of the WMI Class is MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   If you have an installation that uses a different SQL Instance name you'll have to work out the WMI Class Name and use that. I'm going to guess here and say that if the SQL Instance is XXX then the WMI Class will be MSXXX_XXX. If you know how this mapping really works please contact me.
+   Examples:  
+   To select the default SQL Express Instance use -a MSSQLSQLEXPRESS_MSSQLSQLEXPRESS.
+   To select a non-default SQL Instance called XXX use -a MSXXX_XXX.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: Lockwaits (Default), Logbufferwaits, Logwritewaits, Memorygrantqueuewaits, NetworkIOwaits, NonPagelatchwaits, PageIOlatchwaits, Pagelatchwaits, Threadsafememoryobjectswaits, Transactionownershipwaits, Waitfortheworker, Workspacesynchronizationwaits
 
@@ -889,7 +957,8 @@ INI FILE HELP SUMMARY
 
  checkusers, count (-m checkusers -s count)  
    Check the count of users. You can specify the attributes of the users using ARG1.
-   ARG1  You must specify everything that follows the "where" clause in the WMI query. You can use any combination of valid WMI fields for the Win32_UserAccount class. Use ' ' to quote strings. Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching users are found.
+   ARG1  You must specify everything that follows the "where" clause in the WMI query. You can use any combination of valid WMI fields for the Win32_UserAccount class. Use ' ' to quote strings. 
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching users are found.
    Valid WMI Fields for Server 2003 R2/2008 R2  AccountType, Caption, Description, Disabled, Domain, FullName, InstallDate, LocalAccount, Lockout, Name, PasswordChangeable, PasswordExpires, PasswordRequired, SID, SIDType, Status
    ARG1 Example  List all users: -a "status like '%'"
    ARG1 Example  Show users where the Status is OK: -a "status='OK'"
