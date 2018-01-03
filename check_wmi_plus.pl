@@ -25,14 +25,13 @@
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.41";
+my $VERSION="1.42";
 
 use strict;
 use Getopt::Long;
 use vars qw($PROGNAME);
 use lib "/usr/lib/nagios/plugins"; # CHANGE THIS IF NEEDED
 use utils qw ($TIMEOUT %ERRORS &print_revision &support);
-use Data::Dumper;
 
 # command line option declarations
 my $opt_Version='';
@@ -100,20 +99,20 @@ my $wmi_ini_file='/opt/nagios/bin/plugins/check_wmi_plus.ini'; # CHANGE THIS IF 
 # list all valid modes with dedicated subroutines here
 # all the modes that can take a critical/warning specification set to value of 1
 my %mode_list = ( 
-   checkcpu       => 1,
-   checkcpuq      => 1,
-   checkdrivesize => 1,
-   checkeventlog  => 1,
-   checkfileage   => 1,
-   checkfilesize  => 1,
-   checkfoldersize=> 1,
-   checkgeneric   => 1,
-   checkmem       => 1,
-   checknetwork   => 1,
-   checkprocess   => 1,
-   checkservice   => 1,
-   checkuptime    => 1,
-   checkwsusserver=> 0,
+   checkcpu             => 1,
+   checkcpuq            => 1,
+   checkdrivesize       => 1,
+   checkeventlog        => 1,
+   checkfileage         => 1,
+   checkfilesize        => 1,
+   checkfoldersize      => 1,
+   checkgeneric         => 1,
+   checkmem             => 1,
+   checknetwork         => 1,
+   checkprocess         => 1,
+   checkservice         => 1,
+   checkuptime          => 1,
+   checkwsusserver      => 0,
 );
 
 # multipliers are calculated as BYTEFACTOR^mulitpler eg m = x * 1000^2 or x * 1024^2
@@ -154,7 +153,8 @@ my %valid_test_fields = (
    checkfoldersize   => [ qw(_FolderSize _ItemCount) ],
    checkgeneric      => [ qw(FileControlBytesPersec FileControlOperationsPersec FileDataOperationsPersec FileReadBytesPersec FileReadOperationsPersec FileWriteBytesPersec FileWriteOperationsPersec) ],
    checkmem          => [ qw(_MemUsed% _MemFree% _MemUsed _MemFree _MemTotal) ],
-   checknetwork      => [ qw(CurrentBandwidth PacketsSentPersec PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors BytesSentPersec BytesReceivedPersec PacketsSentPersec) ],
+   checknetwork      => [ qw(CurrentBandwidth _PacketsSentPersec _PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors _BytesSentPersec _BytesReceivedPersec) ],
+   checknetwork_OLD  => [ qw(CurrentBandwidth PacketsSentPersec PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors BytesSentPersec BytesReceivedPersec PacketsSentPersec) ],
    checkprocess      => [ qw(_ItemCount) ],
    checkservice      => [ qw(_NumBad _NumGood _Total) ],
    checkuptime       => [ qw(SystemUpTime) ],
@@ -188,7 +188,8 @@ my %display_fields = (
    checkfoldersize   => [ '_DisplayMsg||~|~| - ||', '_arg1||Folder| |~|| is ', '_FolderSize|#B|~|~|. ||', '_ItemCount| files(s)|Found| |.||', '_FileList||~|~|~||' ], 
    checkgeneric      => [ '_DisplayMsg||~|~| - ||', 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ], 
    checkmem          => [ '_DisplayMsg||~|~| - ||', 'MemType||~|~|~||: ', '_MemTotal|#B|Total|: | - ||', '_MemUsed|#B|Used|: | ||', '_MemUsed%|%|~|~| - |(|)', '_MemFree|#B|Free|: | ||', '_MemFree%|%|~|~||(|)' ], 
-   checknetwork      => [ '_DisplayMsg||~|~| - ||', 'Name||Interface: |~| ||', 'CurrentBandwidth|#bit/s|Speed:|~| |(|)', 'BytesSentPersec|#B/sec|Byte Send Rate||||', 'BytesReceivedPersec|#B/sec|Byte Receive Rate||||', 'PacketsSentPersec||Packet Send Rate||||', 'PacketsReceivedPersec||Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
+   checknetwork      => [ '_DisplayMsg||~|~| - ||', 'Name||Interface: |~| ||', 'CurrentBandwidth|#bit/s|Speed:|~| |(|)', '_BytesSentPersec|#B/sec|Byte Send Rate||||', '_BytesReceivedPersec|#B/sec|Byte Receive Rate||||', '_PacketsSentPersec|#packet/sec|Packet Send Rate||||', '_PacketsReceivedPersec|#packet/sec|Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
+   checknetwork_OLD  => [ '_DisplayMsg||~|~| - ||', 'Name||Interface: |~| ||', 'CurrentBandwidth|#bit/s|Speed:|~| |(|)', 'BytesSentPersec|#B/sec|Byte Send Rate||||', 'BytesReceivedPersec|#B/sec|Byte Receive Rate||||', 'PacketsSentPersec||Packet Send Rate||||', 'PacketsReceivedPersec||Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
    checkprocess      => [ '_DisplayMsg||~|~| - ||', '_ItemCount| Instance(s)|Found |~|~|| of "{_arg1}" running.', 'ProcessList||~|~|~||' ],
    checkservice      => [ '_DisplayMsg||~|~| - ||', '_Total| Services(s)|Found |~|||', '_NumGood| OK|~|~| and ||', '_NumBad| with problems. |~|~|~||', '_ServiceList||~|~|~||' ],
    checkuptime       => [ '_DisplayMsg||~|~| - ||', '_DisplayTime||System Uptime is |~|.||' ],
@@ -213,7 +214,8 @@ my %performance_data_fields = (
    checkfoldersize   => [ '_FolderSize|bytes|{_arg1} Size', '_ItemCount||File Count' ],
    checkgeneric      => [ 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ],
    checkmem          => [ '_MemUsed|Bytes|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ], 
-   checknetwork      => [ 'BytesSentPersec', 'BytesReceivedPersec', 'PacketsSentPersec', 'PacketsReceivedPersec', 'OutputQueueLength', 'PacketsReceivedErrors' ],
+   checknetwork      => [ '_BytesSentPersec', '_BytesReceivedPersec', '_PacketsSentPersec', '_PacketsReceivedPersec', 'OutputQueueLength', 'PacketsReceivedErrors' ],
+   checknetwork_OLD  => [ 'BytesSentPersec', 'BytesReceivedPersec', 'PacketsSentPersec', 'PacketsReceivedPersec', 'OutputQueueLength', 'PacketsReceivedErrors' ],
    checkprocess      => [ '_ItemCount||Process Count' ],
    checkservice      => [ '_Total||Total Service Count', '_NumGood||Service Count OK State', '_NumBad||Service Count Problem State' ],
    checkuptime       => [ '_UptimeMin|min|Uptime Minutes' ],
@@ -253,13 +255,17 @@ GetOptions(
    "inihelp"            => \$opt_inihelp,
    );
 
+if ($debug) {
+   use Data::Dumper; # only use module if you have to
+}
+
 # check up on the ini file
 if ($wmi_ini_file && ! -f $wmi_ini_file) {
    print "This plugin requires an INI file.\nConfigure its location by setting the \$wmi_ini_file variable in this plugin or by using the -i parameter to override the default setting.";
    exit $ERRORS{"UNKNOWN"};
 } else {
    # now that we are using an ini file we need this module 
-   use Config::IniFiles;
+   use Config::IniFiles; # only use module if you have to
 }
 
 if ($the_arguments{'_timeout'}) {
@@ -284,6 +290,11 @@ if ($opt_help) {
    usage();
 }
 
+if ($opt_inihelp && !$opt_mode) {
+   # only show the overview of inihelp if no mode is specified
+   show_ini_help_overview();
+}
+
 if ($opt_Version) {
    print "Version: $VERSION\n";
    exit $ERRORS{'OK'};
@@ -297,13 +308,15 @@ if ($opt_warn && $opt_critical && $opt_value) {
    exit $test_result;
 }
 
-if (! $the_arguments{'_host'}) {
+if (! $the_arguments{'_host'} && !$opt_inihelp) {
+   # they did not specify a hostname and they are not trying to get inihelp either
+   # we need the inihelp bit here so that we drop through to load the inifile and read the inihelp
    print "No Hostname specified\n\n";
    short_usage();
 }
 
 # take a copy of the original arguments
-%the_original_arguments=%the_arguments;
+%the_original_arguments=%the_arguments; # not really used at the moment
 
 #==============================================================================
 #===================================== MAIN ===================================
@@ -321,12 +334,10 @@ if (defined($mode_list{$opt_mode})) {
    &$subref('');
 } else {
    if ($wmi_ini_file) {
-      my $ini_section='';
-      my $wmi_ini;
       # maybe the mode is defined in the ini file
       # read the ini file and check
-      $wmi_ini = new Config::IniFiles( -file => "$wmi_ini_file", -allowcontinue => 1 );
-
+      my $ini_section='';
+      my $wmi_ini=open_ini_file();
       # there are 2 ways a section in the ini file is matched
       # 1) [MODE] - $opt_mode matches the whole section name
       # 2) [MODE SUBMODE] = $opt_mode is a Config::IniFiles Group and $opt_submode is a MemberName
@@ -359,18 +370,11 @@ if (defined($mode_list{$opt_mode})) {
       if ($ini_section) {
          checkini($wmi_ini,$ini_section);
       } elsif ($opt_inihelp) {
-         # here we need to list out the modes available in the ini file
-         my @ini_modes=$wmi_ini->Sections();
-         print "The ini file provides the following Modes and/or Submodes - \n";
-         print join("\n",@ini_modes) . "\n";
-         print "Add a valid Mode and/or Submode to this command line to get detailed help for that Mode.\n";
-         exit;
+         show_ini_help_overview();
       } else {
          print "A valid MODE and/or SUBMODE must be specified\n";
          short_usage();
       }
-
-
 
    }
 
@@ -385,6 +389,53 @@ exit $ERRORS{'OK'};
 #================================== FUNCTIONS =================================
 #==============================================================================
 
+#-------------------------------------------------------------------------
+sub open_ini_file {
+return new Config::IniFiles( -file=>$wmi_ini_file, -allowcontinue=>1 );
+}
+#-------------------------------------------------------------------------
+sub show_ini_help_overview {
+# it might be open already but just open it again
+my $wmi_ini=open_ini_file();
+# here we need to list out the modes available in the ini file - with some of the text from their inihelp= field
+my @ini_modes=$wmi_ini->Sections();
+print<<EOT;
+Ini File Help Summary
+=====================
+The ini file ($wmi_ini_file) provides the following Modes and/or Submodes:
+
+EOT
+
+# if we are lucky the env variable COLUMNS has been set to the width of the terminal
+# if not lets just assume 80
+my $term_width=132;
+# make some room for the ...\n we might add to the end
+$term_width-=4;
+foreach my $ini_mode (@ini_modes) {
+   my $query=$wmi_ini->val($ini_mode,'query','');
+   # only do anything else if query is defined
+   
+   if ($query) {
+      my $inihelp=$wmi_ini->val($ini_mode,'inihelp','No help available');
+      # we like to format our inihelp with a line as the title then a line full of ========= and then the text
+      # lets only show the text, by removing the first stuff if it exists
+      $inihelp=~s/^(.+?\n[= ]+\n)(.*)$/$2/s;
+      # convert all line breaks and multiple spaces to single spaces
+      $inihelp=~s/\n/ /sg;
+      $inihelp=~s/( +)/ /sg;
+      # remove leading spaces
+      $inihelp=~s/^( *)//sg;
+   
+      my $display="$ini_mode - $inihelp";            
+      
+      # if it is longer than $term_width chars then add .. to the end and truncate it to make it no longer than $term_width chars
+      $display=~s/^(.{$term_width,$term_width})(.+){1,}$/$1\.\.\./s;
+      print "$display\n";
+   }
+}
+print "\nAdd a valid Mode and/or Submode to this command line when using --inihelp to get detailed help for that ini Mode.\n";
+exit $ERRORS{'UNKNOWN'};
+}
 #-------------------------------------------------------------------------
 sub short_usage {
 my ($no_exit)=@_;
@@ -434,7 +485,7 @@ foreach my $mode (keys %valid_test_fields) {
 short_usage(1);
 my $ini_info='';
 if ($wmi_ini_file) {
-   $ini_info="\nUse --inihelp on its own to list the valid modes contained within the ini file.\n"
+   $ini_info="\nThere is an ini file configured ($wmi_ini_file). This contains more checks.\nUse --inihelp on its own to list the valid modes contained within the ini file.\n"
 }
 
 print <<EOT;
@@ -457,9 +508,9 @@ NODATAEXIT is the plugin result if the WMI Query returns no data. Ignored if -n 
 $ini_info
 MODE=checkcpu
 -------------
-   Some CPU checks just take whatever WMI or SNMP gives them from the precalculated values. We don't. We calculate
-   our own utilisation value over a given timeperiod. This is much more accurate.
-
+   Some CPU checks just take whatever WMI or SNMP gives them from the precalculated values. We don't.
+   We use WMI Raw counters to calculate values over a given timeperiod. 
+   This is much more accurate than taking Formatted WMI values.
    DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
@@ -546,13 +597,17 @@ MODE=checkmem
       $field_lists{'checkmem'}.
 
 MODE=checknetwork
--------------
-   Shows various network parameters. Note that the BYTEFACTOR is set to 1000 by default for this mode.
-   ARG1: (Recommended) Specify with network adapter the stats are collected for.
+-----------------
+   These network checks use WMI Raw counters to calculate values over a given timeperiod. 
+   This is much more accurate than taking Formatted WMI values.
+   ARG1: Specify with network adapter the stats are collected for.
       The name of the network adaptors as seen from WMI are similar to what is seen in the output of the 
       ipconfig/all command on Windows. However, its not exactly the same. Run without -a to list the adapter
       names according to WMI. Typically you need to use '' around the adapter name when specifying.
       eg -a 'Intel[R] PRO_1000 T Server Adapter _2 - Packet Scheduler Miniport'
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
    WARN/CRIT can be used as described below.
       $field_lists{'checknetwork'}
    BYTEFACTOR defaults to 1000 for this mode. You can override this if you wish.
@@ -644,7 +699,11 @@ This will generate a critical if
    - the used % of the drive is more than 25%
 
 WARN and/or CRIT are not used for the following MODES: $modelist
+
 EOT
+
+# add the inihelp to the end of this help
+show_ini_help_overview();
 
 exit $ERRORS{'UNKNOWN'};
 }
@@ -704,7 +763,7 @@ sub get_multiple_wmi_samples {
 # An array reference listing the column titles that we should provide sums for
 #     There are several sums made available
 #     - array index [0][ROWNUMBER] prefixed by _QuerySum_fieldname which sums up all the fieldnames across multiple queries
-#     - array index [QUERYNUMBER][0] prefixed by _RowSum_fieldname which sums up all the fieldnames across multiple rows in a single query number QUERYNUMBER
+#     - array index [QUERYNUMBER][0] prefixed by _ColSum_fieldname which sums up all the fieldnames (columns) for multiple rows in a single query number QUERYNUMBER
 # set $slash_conversion to 1 if we should replace all / in the WMI query with \\
 
 # we return an empty string if it worked ok, a msg if it failed
@@ -732,6 +791,14 @@ if ($$specified_delay) {
       exit $ERRORS{'UNKNOWN'};
    }
 }
+
+# initialise the sums if they have been asked for - since if you find no WMI results the sums would have been left unitialised
+foreach my $field_name (@{$provide_sums}) {
+   # we can only initialise the [0][0] instances but that is enough since they are only a problem if the QMI query returns empty
+   $$results[0][0]{"_QuerySum_$field_name"}=0;
+   $$results[0][0]{"_ColSum_$field_name"}=0;
+}
+
 
 # the WMI query may contain "variables" where we substitute values into
 # a variables looks like {SOMENAME}
@@ -935,8 +1002,8 @@ for (my $i=0;$i<$num_samples;$i++) {
                   # and we also assume that they are valid for this WMI query! ie that the programmer got it right!
                   # this first sum, sums up all the $field_name across all the queries for the Row Number $i
                   $$results[0][$found]{"_QuerySum_$field_name"}+=$$results[$i][$found]{$field_name};
-                  # this sum, sums up all the $field_names within a single query - ie where multiple rows are returned
-                  $$results[$i][0]{"_RowSum_$field_name"}+=$$results[$i][$found]{$field_name};
+                  # this sum, sums up all the $field_names (columns) within a single query - ie where multiple rows are returned
+                  $$results[$i][0]{"_ColSum_$field_name"}+=$$results[$i][$found]{$field_name};
                }
                # increment the results counter for this query
                $found++;         
@@ -1204,6 +1271,259 @@ if ($the_arguments{'_nodata'}) {
 }
 }
 #-------------------------------------------------------------------------
+sub calc_new_field {
+# calculate new fields using "builtin" functions
+# pass in
+# the name of the new field
+# the name of the function to perform
+# a comma delimited list of parameters for the function (each function can vary)
+# an array reference to the collected WMI data array
+my ($newfield,$function,$function_parameters,$wmidata)=@_;
+# we poke the results back into row [0][0] of the $wmidata array
+# if $newfield clashes with something else then we overwrite it
+
+# these functions are often used on WMI data from a "Win32_PerfRawData" class
+$debug && print "Creating '$newfield' using '$function' (Parameters: $function_parameters)\n";
+
+# functions can be some function name I define or we also use the WMI Raw data types eg PERF_100NSEC_TIMER_INV
+if ($function eq 'PERF_100NSEC_TIMER_INV') {
+   # refer http://technet.microsoft.com/en-us/library/cc757283%28WS.10%29.aspx
+   # this is a calculation like for checkcpu found on 
+   # it requires two completed WMI queries (sample=2)
+   # Formula = (1- (   (N2 - N1) / (D2 - D1) /F   )) x 100
+   # we assume that the Timefield (D) we need is Timestamp_Sys100NS
+   # 
+   # the parameters for this "function" are
+   # SOURCEFIELD,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
+   # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
+   #
+   my $final_result='';
+   # this function requires exactly 2 WMI data results ie you should have done 2 WMI queries - if you did more that's your problem
+   # check this first
+   if ($$wmidata[0][0]{'_ChecksOK'}>=2) {
+      my @parameter=split(',',$function_parameters);
+      if ($parameter[0]) {
+         # next to no protection against divide by zero etc
+         $debug && print "Core Calc: (1 - ($$wmidata[1][0]{$parameter[0]} - $$wmidata[0][0]{$parameter[0]}) / 
+                           ($$wmidata[1][0]{Timestamp_Sys100NS} - $$wmidata[0][0]{Timestamp_Sys100NS})  ) * 100 = ";
+         $final_result=(1 - ($$wmidata[1][0]{$parameter[0]} - $$wmidata[0][0]{$parameter[0]}) / 
+                           ($$wmidata[1][0]{Timestamp_Sys100NS} - $$wmidata[0][0]{Timestamp_Sys100NS})  ) * 100;
+         $debug && print " $final_result\n";
+      }
+      if ($parameter[1]) {
+         $final_result=sprintf($parameter[1],$final_result);
+      }
+   } else {
+      # not enough WMI data to return result
+      $final_result='Need at least 2 WMI samples';
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[0][0]{$newfield}=$final_result;
+} elsif ($function eq 'PERF_100NSEC_TIMER') {
+   # refer http://technet.microsoft.com/en-us/library/cc728274%28WS.10%29.aspx
+   # it requires two completed WMI queries (sample=2)
+   # Formula = (Nx - N0) / (Dx - D0) x 100
+   # we assume that the Timefield (D) we need is Timestamp_Sys100NS
+   # 
+   # the parameters for this "function" are
+   # SOURCEFIELD,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
+   # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
+   #
+   my $final_result='';
+   # this function requires exactly 2 WMI data results ie you should have done 2 WMI queries - if you did more that's your problem
+   # check this first
+   if ($$wmidata[0][0]{'_ChecksOK'}>=2) {
+      my @parameter=split(',',$function_parameters);
+      if ($parameter[0]) {
+         # next to no protection against divide by zero etc
+         $debug && print "Core Calc: (  ($$wmidata[1][0]{$parameter[0]} - $$wmidata[0][0]{$parameter[0]}) / 
+                           ($$wmidata[1][0]{Timestamp_Sys100NS} - $$wmidata[0][0]{Timestamp_Sys100NS})  ) * 100 = ";
+         $final_result=(  ($$wmidata[1][0]{$parameter[0]} - $$wmidata[0][0]{$parameter[0]}) / 
+                           ($$wmidata[1][0]{Timestamp_Sys100NS} - $$wmidata[0][0]{Timestamp_Sys100NS})  ) * 100;
+         $debug && print " $final_result\n";
+      }
+      if ($parameter[1]) {
+         $final_result=sprintf($parameter[1],$final_result);
+      }
+   } else {
+      # not enough WMI data to return result
+      $final_result='Need at least 2 WMI samples';
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[0][0]{$newfield}=$final_result;
+} elsif ($function eq 'PERF_COUNTER_COUNTER' || $function eq 'PERF_COUNTER_BULK_COUNT') {
+   # refer http://technet.microsoft.com/en-us/library/cc740048%28WS.10%29.aspx
+   # it requires two completed WMI queries (sample=2)
+   # Formula = (Nx - N0) / ((Dx - D0) / F)
+   # we assume that the Timefield (D) we need is Timestamp_Sys100NS
+   # we assume that the Frequency (F) we need is Frequency_Sys100NS
+   # 
+   # the parameters for this "function" are
+   # SOURCEFIELD,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
+   # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
+   #
+   my $final_result='';
+   # this function requires exactly 2 WMI data results ie you should have done 2 WMI queries - if you did more that's your problem
+   # check this first
+   if ($$wmidata[0][0]{'_ChecksOK'}>=2) {
+      my @parameter=split(',',$function_parameters);
+      if ($parameter[0]) {
+         # next to no protection against divide by zero etc
+         $debug && print "Core Calc: ($$wmidata[1][0]{$parameter[0]} - $$wmidata[0][0]{$parameter[0]}) / 
+                       (    ($$wmidata[1][0]{Timestamp_Sys100NS} - $$wmidata[0][0]{Timestamp_Sys100NS})  /  $$wmidata[1][0]{Frequency_Sys100NS} ) = ";
+         $final_result=($$wmidata[1][0]{$parameter[0]} - $$wmidata[0][0]{$parameter[0]}) / 
+                       (    ($$wmidata[1][0]{Timestamp_Sys100NS} - $$wmidata[0][0]{Timestamp_Sys100NS})  /  $$wmidata[1][0]{Frequency_Sys100NS} ) ;
+         $debug && print " $final_result\n";
+      }
+      if ($parameter[1]) {
+         $final_result=sprintf($parameter[1],$final_result);
+      }
+   } else {
+      # not enough WMI data to return result
+      $final_result='Need at least 2 WMI samples';
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[0][0]{$newfield}=$final_result;
+} elsif ($function eq 'PERF_PRECISION_100NS_TIMER' || $function eq 'PERF_COUNTER_100NS_QUEUELEN_TYPE') {
+   # refer http://technet.microsoft.com/en-us/library/cc756128%28WS.10%29.aspx
+   # it requires two completed WMI queries (sample=2)
+   # Formula = N1 - N0 / D1 - D0
+   # we assume that the Timefield (D) we need is Timestamp_Sys100NS
+   #
+   # REfer http://technet.microsoft.com/en-us/library/cc781696%28WS.10%29.aspx for PERF_COUNTER_100NS_QUEUELEN_TYPE
+   # This one seems to give correct results calculated like this but has a slightly different formula on the reference page?
+   # 
+   # the parameters for this "function" are
+   # SOURCEFIELD,MULTIPLIER,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
+   # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
+   # MULTIPLIER [2] is a multiplier useful to make the fraction a percentage eg 100
+   # INVERT [3] take the value away from this number. Useful in the following example eg set this value to 100 to show busy percentage where counter value is an idle percentage. Applied after the multiplier
+   #
+   my $final_result='';
+   # this function requires exactly 2 WMI data results ie you should have done 2 WMI queries - if you did more that's your problem
+   # check this first
+   if ($$wmidata[0][0]{'_ChecksOK'}>=2) {
+      my @parameter=split(',',$function_parameters);
+      if ($parameter[0]) {
+         # next to no protection against divide by zero etc
+         $debug && print "Core Calc: ($$wmidata[1][0]{$parameter[0]} - $$wmidata[0][0]{$parameter[0]}) / 
+                       ($$wmidata[1][0]{Timestamp_Sys100NS} - $$wmidata[0][0]{Timestamp_Sys100NS}) = ";
+         $final_result=($$wmidata[1][0]{$parameter[0]} - $$wmidata[0][0]{$parameter[0]}) / 
+                       ($$wmidata[1][0]{Timestamp_Sys100NS} - $$wmidata[0][0]{Timestamp_Sys100NS});
+         $debug && print " $final_result\n";
+      }
+      if ($parameter[2]) {
+         $final_result=$final_result*$parameter[2];
+      }
+      if ($parameter[3]) {
+         $final_result=$parameter[3]-$final_result;
+      }
+      if ($parameter[1]) {
+         $final_result=sprintf($parameter[1],$final_result);
+      }
+   } else {
+      # not enough WMI data to return result
+      $final_result='Need at least 2 WMI samples';
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[0][0]{$newfield}=$final_result;
+} elsif ($function eq 'percent') {
+   # it requires one completed WMI queries 
+   # the parameters for this "function" are
+   # SOURCEFIELD1,SOURCEFIELD2,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD1 [0] is some number
+   # SOURCEFIELD2 [1] is some number
+   # SPRINTF_SPEC [2] - a format specification passed directly to sprintf to format the result (can leave blank)
+   # INVERT [3] take the resulting value away from this number. Useful in the following example eg set this value to 100 to show busy percentage where counter value is an idle percentage.
+   # Formula is 100 * SOURCEFIELD1/SOURCEFIELD2
+   #
+   my $final_result='';
+   # this function requires only 1 WMI data result set. don't worry about checking it
+   my @parameter=split(',',$function_parameters);
+   if ($parameter[0]) {
+      # next to no protection against divide by zero etc
+      $debug && print "Core Calc: 100 * ($$wmidata[1][0]{$parameter[0]} / $$wmidata[0][0]{$parameter[1]}) = ";
+      $final_result=100 * ($$wmidata[0][0]{$parameter[0]} / $$wmidata[0][0]{$parameter[1]});
+      $debug && print " $final_result\n";
+   }
+   if ($parameter[3]) {
+      $final_result=$parameter[3]-$final_result;
+   }
+   if ($parameter[2]) {
+      $final_result=sprintf($parameter[2],$final_result);
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[0][0]{$newfield}=$final_result;
+} else {
+   print "ERROR: Invalid function specified for calculating custom fields\n";
+}
+}
+#-------------------------------------------------------------------------
+sub process_custom_fields_list {
+# run through a list of custom field parameters from an ini file and create the values requested
+# pass in 
+# an array of values from the ini file
+# the wmi data array @collected_data
+my ($list,$wmidata)=@_;
+
+foreach my $item (@{$list}) {
+   $debug && print "Creating Custom Field for $item\n";
+   # the format of this field is
+   # NEWFIELDNAME,FUNCTION,FUNCTIONPARAMETERS
+   # where FUNCTIONPARAMETERS itself is a comma delimited list
+   # we want to split it into the 3 fields
+   if ($item=~/(.*?),(.*?),(.*)/) {
+      # $1 is the NEWFIELDNAME
+      # $2 is the FUNCTION
+      # $3 is the FUNCTIONPARAMETERS
+      calc_new_field($1,$2,$3,$wmidata);
+   } else {
+      print "WARNING: Could not correctly parse ini customfield: $item (for $opt_mode)\n";
+   }
+   
+}
+}
+#-------------------------------------------------------------------------
+sub process_custom_lists {
+# run through a list of custom field parameters from an ini file and create the values requested
+# pass in 
+# an array of values from the ini file
+# the wmi data array @collected_data
+my ($list,$wmidata)=@_;
+
+foreach my $item (@{$list}) {
+   $debug && print "Creating Custom List for $item\n";
+   # the format of this field is
+   #      1           2         3         4          5
+   # NEWFIELDNAME|LINEDELIM|FIELDDELIM|UNIQUE|FIELD1,FIELD2,etc
+   # we want to split it into the fields
+   if ($item=~/^(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)$/) {
+      # $5 must be turned into an array
+      my $newfield=$1;
+      my $linedelim=$2;
+      my $fielddelim=$3;
+      my $unique=$4;
+      my $sourcefields=$5;
+      my @fieldlist=split(',',$sourcefields);
+      #print "$newfield,$linedelim,$fielddelim,$unique and $sourcefields=" . Dumper(\@fieldlist);
+      $$wmidata[0][0]{$newfield}=list_collected_values_from_all_rows($wmidata,\@fieldlist,$linedelim,$fielddelim,$unique);
+      #print "   Set to: $$wmidata[0][0]{$newfield}\n";
+   } else {
+      print "WARNING: Could not correctly parse ini createlist: $item (for $opt_mode)\n";
+   }
+   
+}
+}
+#-------------------------------------------------------------------------
 sub checkini {
 # run a check as defined in the ini file
 my ($wmi_ini,$ini_section)=@_;
@@ -1244,7 +1564,7 @@ if ($query) {
       my $requires_version=$wmi_ini->val($ini_section,'requires',0);
       if ($VERSION < $requires_version) {
          # this is a problem
-         print "This check ($opt_mode) requires at least version $requires_version of the plugin\n";
+         print "This check ($opt_mode) requires at least version $requires_version of the plugin\nThere are probably features implemented in that version that this check uses.\n";
          exit $ERRORS{'UNKNOWN'};
       }
       
@@ -1262,17 +1582,43 @@ if ($query) {
       
       my $custom_header_regex=$wmi_ini->val($ini_section,'headerregex','');
       my $custom_data_regex=$wmi_ini->val($ini_section,'dataregex','');
+      
+      # see how many samples to get
+      my $number_wmi_samples=$wmi_ini->val($ini_section,'samples',1); # default is 1
+      
+      # see what delay to use
+      # the setting in the ini file defines the default delay
+      my $ini_delay=$wmi_ini->val($ini_section,'delay',5); # default is 5
+      if ($the_arguments{'_delay'} eq '') {
+         $the_arguments{'_delay'}=$ini_delay;
+      }
+
+      # extract the calc field if any and get it ready
+      my $calc_list=$wmi_ini->val($ini_section,'calc',''); 
+      my @calc_array=();
+      if ($calc_list) {
+         @calc_array=split(',',$calc_list);
+      }
 
       my @collected_data;
-      my $data_errors=get_multiple_wmi_samples(1,
-         "$query",
-         $custom_header_regex,$custom_data_regex,\@collected_data,\$the_arguments{'_delay'},undef,$wmi_ini->val($ini_section,'slashconversion',''));
+      my $data_errors=get_multiple_wmi_samples($number_wmi_samples,$query,
+         $custom_header_regex,$custom_data_regex,\@collected_data,\$the_arguments{'_delay'},\@calc_array,$wmi_ini->val($ini_section,'slashconversion',''));
       
       if ($data_errors) {
          print "UNKNOWN: Could not retrieve all required data. $data_errors";
          exit $ERRORS{'UNKNOWN'};
       } else {
          no_data_check($collected_data[0][0]{'_ItemCount'});
+         
+         # calculate custom fields, if any defined
+         my @customfield_fields_list=$wmi_ini->val($ini_section,'customfield',undef);
+         process_custom_fields_list(\@customfield_fields_list,\@collected_data);
+         
+         # process any list specifications
+         # $collected_data[0][0]{'_CPUQPoints'}=list_collected_values_from_all_rows(\@collected_data,['ProcessorQueueLength'],', ','',0);
+         # calculate custom list fields, if any defined
+         my @customlists_list=$wmi_ini->val($ini_section,'createlist',undef);
+         process_custom_lists(\@customlists_list,\@collected_data);
 
          my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[0][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
          my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[0][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
@@ -1330,14 +1676,15 @@ if ($data_errors) {
    exit $ERRORS{'UNKNOWN'};
 } else {
    # at this point we can assume that we have all the data we need stored in @collected_data
-   # see http://msdn.microsoft.com/en-us/library/aa392397%28v=vs.85%29.aspx
-   # all our results in in the first query [0] and on the first row [0]
+   # this is a counter type of PERF_100NSEC_TIMER_INV, refer http://technet.microsoft.com/en-us/library/cc757283%28WS.10%29.aspx
+   calc_new_field('_AvgCPU','PERF_100NSEC_TIMER_INV','PercentProcessorTime,%.2f',\@collected_data);
+
    my $avg_cpu_util=(1- 
       (      ($collected_data[1][0]{'PercentProcessorTime'} - $collected_data[0][0]{'PercentProcessorTime'}) / 
              ($collected_data[1][0]{'Timestamp_Sys100NS'} - $collected_data[0][0]{'Timestamp_Sys100NS'})
       ) )* 100;
+   $collected_data[0][0]{'_OriginalAvgCPU'}=sprintf("%.2f", $avg_cpu_util);
 
-   $collected_data[0][0]{'_AvgCPU'}=sprintf("%.0f", $avg_cpu_util);
 
    my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[0][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
    my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[0][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
@@ -1356,6 +1703,61 @@ my @collected_data;
 if (!$the_arguments{'_bytefactor'}) {
    $actual_bytefactor=1000;
 }
+
+# set default delay for this mode
+if ($the_arguments{'_delay'} eq '') {
+   $the_arguments{'_delay'}=5;
+}
+
+my $where_bit='';
+if ($the_arguments{'_arg1'} ne '') {
+   $where_bit="where Name=\"$the_arguments{'_arg1'}\"";
+}
+my $data_errors=get_multiple_wmi_samples(2,
+   "select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,Frequency_Sys100NS,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfRawData_Tcpip_NetworkInterface $where_bit",
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+
+if ($data_errors) {
+   print "UNKNOWN: Could not retrieve all required data. $data_errors";
+   exit $ERRORS{'UNKNOWN'};
+} elsif ($collected_data[0][0]{'_ItemCount'}>=1) {
+   # at this point we can assume that we have all the data we need stored in @network_data
+   # there is some point collected data that could be useful to average over a few samples here
+   # I may do that later
+   
+   if ($where_bit) {
+
+      # these are a counter type of PERF_COUNTER_COUNTER, refer http://technet.microsoft.com/en-us/library/cc740048%28WS.10%29.aspx
+      calc_new_field('_BytesReceivedPersec','PERF_COUNTER_COUNTER','BytesReceivedPersec,%.0f',\@collected_data);
+      calc_new_field('_BytesSentPersec','PERF_COUNTER_COUNTER','BytesSentPersec,%.0f',\@collected_data);
+      calc_new_field('_PacketsReceivedPersec','PERF_COUNTER_COUNTER','PacketsReceivedPersec,%.0f',\@collected_data);
+      calc_new_field('_PacketsSentPersec','PERF_COUNTER_COUNTER','PacketsSentPersec,%.0f',\@collected_data);
+
+      my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[0][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
+      my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[0][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
+      print $this_combined_data;
+      exit $test_result;
+   } else {
+      # no where_bit specified so just list out all the adapter names
+      print "Adapter Names are:\n" . list_collected_values_from_all_rows(\@collected_data,['Name'],"\n",'',0) . "\nSpecify the -a parameter with an adapter name.";
+      exit $ERRORS{'UNKNOWN'};
+   }
+} else {
+   print "No data returned. Possibly the Network Adapter Name does not exist. Stop using the -a parameter and this will list valid adapter names.";
+   exit $ERRORS{'UNKNOWN'};
+}
+
+}
+#-------------------------------------------------------------------------
+sub checknetwork_OLD {
+my @collected_data;
+
+# for network stuff we often want $actual_bytefactor to be 1000
+# so lets use that unless the user has set something else
+if (!$the_arguments{'_bytefactor'}) {
+   $actual_bytefactor=1000;
+}
+
 
 my $where_bit='';
 if ($the_arguments{'_arg1'} ne '') {
@@ -1652,7 +2054,7 @@ if ($data_errors) {
    no_data_check($collected_data[0][0]{'_ItemCount'});
 
    # Load the _FolderSize so that the user can specify warn/critical criteria
-   $collected_data[0][0]{'_FolderSize'}=$collected_data[0][0]{'_RowSum_FileSize'}||0; # this was automatically calculated for us
+   $collected_data[0][0]{'_FolderSize'}=$collected_data[0][0]{'_ColSum_FileSize'}||0; # this was automatically calculated for us
    $collected_data[0][0]{'_FileList'}='';
 
    if ($collected_data[0][0]{'_ItemCount'}>0) {
@@ -1922,8 +2324,8 @@ if ($data_errors) {
       # add the new fake system total info
       # we make it look like WMI returned info about a disk call SystemTotalDisk
          $collected_data[0][0]{'DeviceID'}=$alldisk_identifier;
-         $collected_data[0][0]{'FreeSpace'}=$collected_data[0][0]{'_RowSum_FreeSpace'};
-         $collected_data[0][0]{'Size'}=$collected_data[0][0]{'_RowSum_Size'};
+         $collected_data[0][0]{'FreeSpace'}=$collected_data[0][0]{'_ColSum_FreeSpace'};
+         $collected_data[0][0]{'Size'}=$collected_data[0][0]{'_ColSum_Size'};
          $collected_data[0][0]{'VolumeName'}=$alldisk_identifier;
 
    }
