@@ -21,7 +21,7 @@
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #
 
-my $VERSION="1.04";
+my $VERSION="1.05";
 
 use strict;
 use Getopt::Long;
@@ -148,13 +148,6 @@ if ( ! $opt_soft && ! $opt_hard ) {
    $opt_hard=1;
 }
 
-if ($opt_soft && $opt_numbersoft eq 'L') {
-   # soft state execution on the last soft state which is calculated by 
-   # NAGIOS_MAXSERVICEATTEMPTS - 1
-   $opt_numbersoft=$ENV{'NAGIOS_MAXSERVICEATTEMPTS'}-1;
-   $debug && print "Setting execution for Soft attempt number $opt_numbersoft\n";
-}
-
 # work out if we will execute this command under this NAGIOS_SERVICESTATE and NAGIOS_SERVICEATTEMPT number
 my $nagios_hostname=$ENV{'NAGIOS_HOSTNAME'} || $ENV{'ICINGA_HOSTNAME'} || '';
 my $nagios_servicedesc=$ENV{'NAGIOS_SERVICEDESC'} || $ENV{'ICINGA_SERVICEDESC'} || '';
@@ -163,6 +156,13 @@ my $nagios_serviceattempt=$ENV{'NAGIOS_SERVICEATTEMPT'} || $ENV{'ICINGA_SERVICEA
 my $nagios_maxserviceattempts=$ENV{'NAGIOS_MAXSERVICEATTEMPTS'} || $ENV{'ICINGA_MAXSERVICEATTEMPTS'} || '';
 my $nagios_servicestatetype=$ENV{'NAGIOS_SERVICESTATETYPE'} || $ENV{'ICINGA_SERVICESTATETYPE'} || '';
 my $nagios_serviceoutput=$ENV{'NAGIOS_SERVICEOUTPUT'} || $ENV{'ICINGA_SERVICEOUTPUT'} || '';
+
+if ($opt_soft && $opt_numbersoft eq 'L') {
+   # soft state execution on the last soft state which is calculated by 
+   # NAGIOS_MAXSERVICEATTEMPTS - 1
+   $opt_numbersoft=$nagios_maxserviceattempts-1;
+   $debug && print "Setting execution for Soft attempt number $opt_numbersoft\n";
+}
 
 print "HOST=$nagios_hostname, SERVICE=$nagios_servicedesc, STATE=$nagios_servicestate, ATTEMPT $nagios_serviceattempt/$nagios_maxserviceattempts, TYPE=$nagios_servicestatetype, OUTPUT=$nagios_serviceoutput\n";
 

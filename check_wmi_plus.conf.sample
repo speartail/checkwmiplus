@@ -11,9 +11,6 @@
 
 # ---------------------- FILE LOCATIONS -------------------------
 
-# we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
-use lib "/usr/lib/nagios/plugins"; # CHANGE THIS IF NEEDED
-
 # Set the full path where the plugin is installed
 # You might not even use this variable if you have different locations for everything
 # as a first guess, grab the directory that this conf file lives in
