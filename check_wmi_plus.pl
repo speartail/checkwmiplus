@@ -39,7 +39,7 @@ my $conf_file='/opt/nagios/bin/plugins/check_wmi_plus.conf';
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.48";
+my $VERSION="1.49";
 
 # we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
 use lib "/usr/lib/nagios/plugins";
@@ -58,8 +58,8 @@ my $opt_password='';
 my $opt_wminamespace='root/cimv2'; # this is the default namespace
 my $opt_warn=(); # this becomes an array reference
 my $opt_critical=(); # this becomes an array reference
-my $opt_include_data=[]; # this becomes an array reference
-my $opt_exclude_data=[]; # this becomes an array reference
+my @opt_include_data=(); # this becomes an array reference
+my @opt_exclude_data=(); # this becomes an array reference
 my $debug=0; # default value
 my $opt_value='';
 my $opt_z='';
@@ -328,11 +328,11 @@ GetOptions(
    "bytefactor=s"       => \$the_arguments{'_bytefactor'},
    "critical=s@"        => \$opt_critical,
    "debug+"             => \$debug,
-   "excludedata=s@"     => \$opt_exclude_data,
+   "excludedata=s@"     => \@opt_exclude_data,
    "help"               => \$opt_help,
    "Hostname=s"         => \$the_arguments{'_host'},
    "iexamples=s"        => \$opt_command_examples,
-   "includedata=s@"     => \$opt_include_data,
+   "includedata=s@"     => \@opt_include_data,
    "inidir=s"           => \$wmi_ini_dir,
    "inifile=s"          => \$wmi_ini_file,
    "inihelp"            => \$opt_inihelp,
@@ -397,6 +397,7 @@ if ($debug) {
       print "======================================== SYSTEM INFO =====================================================\n";
       print "--------------------- Module Versions ---------------------\n";
       print "Perl Version: $]\n";
+      print "DateTime - $DateTime::VERSION\n";
       print "Getopt::Long - $Getopt::Long::VERSION\n";
       print "Scalar::Util - $Scalar::Util::VERSION\n";
       print "Data::Dumper - $Data::Dumper::VERSION\n";
@@ -1153,7 +1154,7 @@ checkfoldersize
    WARNING - This check can be slow and may timeout, especially if including subdirectories. 
       It can overload the Windows machine you are checking. Use with caution.
    ARG1  full path to the folder. Use '/' (forward slash) instead of '\\\\' (backslash). eg "C:/Windows"
-   ARG4  Set this to s to include files from subdirectories eg -x s
+   ARG4  Set this to s to include files from subdirectories eg -4 s
    NODATAEXIT  can be set for this check.
    WARN/CRIT  can be used as described below.
    If you specify --nodatamode then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
@@ -1374,7 +1375,7 @@ if ($wmic_delimiter ne '|') {
    $alt_delim=" --delimiter='$wmic_delimiter'";
 }
 
-$wmi_commandline = "$wmic_command$alt_delim --namespace $opt_wminamespace -U ${opt_username}%${opt_password} //$the_arguments{'_host'} '$wmi_query'";
+$wmi_commandline = "$wmic_command$alt_delim --namespace $opt_wminamespace -U '${opt_username}%${opt_password}' //$the_arguments{'_host'} '$wmi_query'";
 
 my $all_output=''; # this holds information if any errors are encountered
 
@@ -1660,6 +1661,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   # we can assume that they are numbers
                   # and we also assume that they are valid for this WMI query! ie that the programmer got it right!
                   # this first sum, sums up all the $field_name across all the queries for the Row Number $i
+                  $debug && print "Summing for FIELD:\"$field_name\"\n";
                   $$results[0][$found]{"_QuerySum_$field_name"}+=$$results[$i][$found]{$field_name};
                   # this sum, sums up all the $field_names (columns) within a single query - ie where multiple rows are returned
                   $$results[$i][0]{"_ColSum_$field_name"}+=$$results[$i][$found]{$field_name};
@@ -2600,8 +2602,10 @@ if ($#$specifications>=0) {
    if ($num_exclusions>0) {
       # load the new data into the data array for the new last query data
       @{$$wmidata[$last_wmi_data_index]}=@new_wmi_query_data;
-      # load the new first wmi query data
-      @{$$wmidata[0]}=@new_first_wmi_query_data;
+      # load the new first wmi query data, if we have not already
+      if ($last_wmi_data_index>0) {
+         @{$$wmidata[0]}=@new_first_wmi_query_data;
+      }
       # run a no data check since we changed the data
       no_data_check($$wmidata[$last_wmi_data_index][0]{'_ItemCount'});
    }
@@ -2873,8 +2877,8 @@ if ($query) {
       my @ini_includes=$wmi_ini->val($ini_section,'includedata');
       my @ini_excludes=$wmi_ini->val($ini_section,'excludedata');
 
-      my @all_includes=(@{$opt_include_data}, @ini_includes);
-      my @all_excludes=(@{$opt_exclude_data}, @ini_excludes);
+      my @all_includes=(@opt_include_data, @ini_includes);
+      my @all_excludes=(@opt_exclude_data, @ini_excludes);
 
       clude_wmi_data(1,\@all_includes,\@collected_data,$process_each_row,$last_wmi_data_index);
       clude_wmi_data(0,\@all_excludes,\@collected_data,$process_each_row,$last_wmi_data_index);
@@ -3452,7 +3456,6 @@ my ($this_display_info,$this_performance_data,$this_combined_data)=create_displa
 print $this_combined_data;
 
 exit $test_result;
-
 }
 #-------------------------------------------------------------------------
 sub checkwsusserver {
@@ -3749,6 +3752,8 @@ my $num_critical=0;
 my $num_warning=0;
 my $alldisk_identifier='Overall Disk';
 
+$debug && print "WMI Index = $last_wmi_data_index\n";
+
 if ($the_arguments{'_arg3'}) {
    # include the system totals
    # now we want to add a index before 0 so we copy everything from index 0 and unshift it to the front
@@ -3773,18 +3778,27 @@ if ($the_arguments{'_arg3'}) {
 # now loop through the results, showing the ones requested
 foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    # make sure $$row{'VolumeName'} is initialised (it won't be unless the drive has been named)
+   $debug && print "ROW BEFORE: " . Dumper($row);
    $$row{'VolumeName'}=$$row{'VolumeName'} || '';
    # if $the_arguments{'_arg1'} is left out it will be blank and will match all drives
    if ($$row{'DeviceID'}=~/$the_arguments{'_arg1'}/i || $$row{'VolumeName'}=~/$the_arguments{'_arg1'}/i || ($$row{'DeviceID'} eq $alldisk_identifier && $the_arguments{'_arg3'}) ) {
       # include this drive in the results
-      if ($$row{'Size'}>0) {
+      if ($$row{'Size'} ne '') {
          # got valid data
          # add our calculated data to the hash
          $$row{'_DriveSizeGB'}=sprintf("%.2f", $$row{'Size'}/$actual_bytefactor/$actual_bytefactor/$actual_bytefactor);
          $$row{'_UsedSpace'}=$$row{'Size'}-$$row{'FreeSpace'};
-         $$row{'_Used%'}=sprintf("%.1f",$$row{'_UsedSpace'}/$$row{'Size'}*100);
+         if ($$row{'Size'}>0) {
+            $$row{'_Used%'}=sprintf("%.1f",$$row{'_UsedSpace'}/$$row{'Size'}*100);
+         } else {
+            $$row{'_Used%'}=0;
+         }
          $$row{'_UsedGB'}=sprintf("%.2f", $$row{'_UsedSpace'}/$actual_bytefactor/$actual_bytefactor/$actual_bytefactor);
-         $$row{'_Free%'}=sprintf("%.1f",$$row{'FreeSpace'}/$$row{'Size'}*100);
+         if ($$row{'Size'}>0) {
+            $$row{'_Free%'}=sprintf("%.1f",$$row{'FreeSpace'}/$$row{'Size'}*100);
+         } else {
+            $$row{'_Free%'}=0;
+         }
          $$row{'_FreeGB'}=sprintf("%.2f", $$row{'FreeSpace'}/$actual_bytefactor/$actual_bytefactor/$actual_bytefactor);
          
          my $test_result=test_limits($opt_warn,$opt_critical,$row,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
@@ -3817,6 +3831,7 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
          # this drive does not get included in the results size there is a problem with its data
       }
    }
+   $debug && print "ROW AFTER: " . Dumper($row);   
 }
 
 if ($results_text) {
@@ -3834,7 +3849,7 @@ if ($results_text) {
       exit $ERRORS{'OK'};
    }
 } else {
-   print "UNKNOWN - Could not find a drive matching '$the_arguments{'_arg1'}'. Available Drives are " . list_collected_values_from_all_rows(\@collected_data,['DeviceID'],', ','',0);
+   print "UNKNOWN - Could not find a drive matching '$the_arguments{'_arg1'}' or the WMI data returned is invalid. Available Drives are " . list_collected_values_from_all_rows(\@collected_data,['DeviceID'],', ','',0);
    exit $ERRORS{'UNKNOWN'};
 }
 
@@ -4093,17 +4108,17 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
                $include_record=0;
                last;
             }
+         }
 
-            # look for exclusions based on Message, but only if it is included already
-            if ($include_record) {
-               # now check for includes against Message
-               foreach my $em (@em_list) {
-                  $debug && print "Exclusion Checking Message for $em\n";
-                  if ($$row{'Message'}=~/$em/i) {
-                     $debug && print "Excluding\n";
-                     $include_record=0;
-                     last;
-                  }
+         # look for exclusions based on Message, but only if it is included already
+         if ($include_record) {
+            # now check for includes against Message
+            foreach my $em (@em_list) {
+               $debug && print "Exclusion Checking Message for $em\n";
+               if ($$row{'Message'}=~/$em/i) {
+                  $debug && print "Excluding\n";
+                  $include_record=0;
+                  last;
                }
             }
          }

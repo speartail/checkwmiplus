@@ -1,4 +1,4 @@
-check_wmi_plus v1.48
+check_wmi_plus v1.49
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -278,7 +278,7 @@ checkfoldersize
    WARNING - This check can be slow and may timeout, especially if including subdirectories. 
       It can overload the Windows machine you are checking. Use with caution.
    ARG1  full path to the folder. Use '/' (forward slash) instead of '\\' (backslash). eg "C:/Windows"
-   ARG4  Set this to s to include files from subdirectories eg -x s
+   ARG4  Set this to s to include files from subdirectories eg -4 s
    NODATAEXIT  can be set for this check.
    WARN/CRIT  can be used as described below.
    If you specify --nodatamode then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
@@ -502,6 +502,18 @@ INI FILE HELP SUMMARY
    Tested for Microsoft Exchange 2003.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default), SessionsInUse
+
+ checkfolderfileage (-m checkfolderfileage)  
+   Check a Folder for files of a certain age.
+   You most likely want to use --includedata and or --excludedata to list only the files that match the age you are interested in and then use -w and -c to warn against the number of files you end up finding.
+   For example, find files in c:/temp with an age of between 0 and 10000 seconds. 
+   Warn if you find more than 3 of these. 
+   Use the parameters -a c: -o /temp/ -inc _FileAge=@0:10000 -w 3. 
+   Alternatively, you could just warn against the _FileAge directly eg -a c: -o /temp/ -w _FileAge=1000
+   ARG1  The drive letter of the folder  eg C:
+   ARG2  The path of the folder on the specified drive eg /temp/. Folders must end in /
+
+   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default), _FileAge
 
  checkiis, connections (-m checkiis -s connections)  
    Check connection stats for a Microsoft IIS Web Server.
