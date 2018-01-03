@@ -1,4 +1,4 @@
-check_wmi_plus v1.54
+check_wmi_plus v1.55
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -11,7 +11,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--includedata DATASPEC] [--excludedata DATASPEC] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp] [--forcewmiccommand]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow]
  
  Help as a Manpage:  
  
@@ -104,6 +104,18 @@ LESS COMMONLY USED OPTIONS
  -d  Enable debug. Use this to see a lot more of what is going on including the exact WMI Query and results. User/passwords should be masked in the resulting output unless -z is specified.
  
  --forcewmiccommand  Force the use of the wmic binary instead of using the WMI Client library. The WMI Client library is used automatically (since it is faster) if it is available on the host running check_wmi_plus. You can tell if you are using the library or the binary wmic by examining the output of -d.
+
+--ishowusage  Pro Version only. Show usage stats in plugin output.
+
+--icollectusage  Pro Version only. Collect usage stats.
+
+--logswitch  Pro Version only. Switch usage DB file.
+
+--logkeep  Pro Version only. do not remove the Usage DB file you are switching to.
+
+--logsuffix SUFFIX  Pro Version only. Switch to the Usage DB file using SUFFIX.
+
+--logshow  Pro Version only. Show current Usage DB file.
 
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc.
@@ -781,7 +793,8 @@ INI FILE HELP SUMMARY
 
  checkproc, cpuabove (-m checkproc -s cpuabove)  
    Check for processes using more than a specified CPU utilisation. To make this work as intended you need to specify some
-   warning/critical criteria eg -w 50 for warning when a process uses more than 50% CPU.
+   warning/critical criteria eg -w 50 for warning when a process uses more than 50% CPU. You probably also want to remove 
+   all processes with low CPU from the results. Do this using something like -exc _AvgCPU=@0:5 (which will exclude processes that have CPU utilisation between 0 and 5%)
    ARG1  The processname to look for. Use % for wildcards.
    The process name typically only includes the actual file name minus its suffix eg firefox, svchost
    If there are multiple instances eg svchost, then some versions of Windows have them named all the same while others
@@ -810,7 +823,33 @@ INI FILE HELP SUMMARY
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default), HandleCount, _KernelModeTime, MaximumWorkingSetSize, MinimumWorkingSetSize, PageFaults, PageFileUsage, PeakPageFileUsage, PeakVirtualSize, PeakWorkingSetSize, Priority, PrivatePageCount, ReadOperationCount, ReadTransferCount, ThreadCount, _UserModeTime, VirtualSize, WorkingSetSize, WriteOperationCount, WriteTransferCount
 
  checkproc, memory (-m checkproc -s memory)  
-   Check memory details for individual processes
+   Check memory details for individual processes showing individual process details.
+   ARG1  The processname to look for. Use % for wildcards.
+   The process name typically only includes the actual file name minus its suffix eg firefox, svchost
+   If there are multiple instances eg svchost, then some versions of Windows have them named all the same while others
+   such as Windows 2008 Server, have them numbered eg svchost#1, svchost#2, svchost#3. To get all svchost processes you
+   need to set ARG1 to svchost%
+   To view all processes set ARG1 to "%" and the full process list will be included in the plugin output.
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
+
+   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default), PrivateBytes, WorkingSet, VirtualBytes
+
+ checkproc, memoryabove (-m checkproc -s memoryabove)  
+   Check for processes using more that a specified amount of memory. To make this work as intended you need to specify some
+   warning/critical criteria eg -w WorkingSet=50M for warning when a process uses more than 50M of WorkingSet memory. You probably also want to remove 
+   all processes with memory lower than the warning level. Do this using something like -exc WorkingSet=@0:40M (which will exclude processes that have a WorkingSet between 0 and 40M). We could have made that -exc WorkingSet=@0:50M but then the check will only show processes when there are some to warn against. That might be what you want. Instead of WorkingSet, you can also use PrivateBytes or VirtualBytes. You can in fact use more than one of them at the same time if you wish eg -exc WorkingSet=@0:50M -exc VirtualBytes=@0:50M.
+   ARG1  The processname to look for. Use % for wildcards.
+   The process name typically only includes the actual file name minus its suffix eg firefox, svchost
+   If there are multiple instances eg svchost, then some versions of Windows have them named all the same while others
+   such as Windows 2008 Server, have them numbered eg svchost#1, svchost#2, svchost#3. To get all svchost processes you
+   need to set ARG1 to svchost%
+   To view all processes set ARG1 to "%" and the full process list will be included in the plugin output.
+   Note:  Use --nodatamode and/or NODATAEXIT settings to control what happens if no matching process is found.
+
+   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default), PrivateBytes, WorkingSet, VirtualBytes
+
+ checkproc, memorytotals (-m checkproc -s memorytotals)  
+   Check memory details for individual processes and show memory totals.
    ARG1  The processname to look for. Use % for wildcards.
    The process name typically only includes the actual file name minus its suffix eg firefox, svchost
    If there are multiple instances eg svchost, then some versions of Windows have them named all the same while others
@@ -1017,6 +1056,11 @@ INI FILE HELP SUMMARY
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _ItemCount (Default)
 
+ info, cpu (-m info -s cpu)  
+   This check shows basic cpu information.
+
+   WARN/CRIT  Not used for this MODE.
+
  info, listsoftware2003 (-m info -s listsoftware2003)  
    Lists all the instances of software installed. Used during testing/debuging/helping others.
    Gives a lot of output!
@@ -1099,3 +1143,14 @@ INI FILE HELP SUMMARY
 
    WARN/CRIT  Not used for this MODE.
 
+
+Plugin Elapsed with Usage Stats
+   Plugin Elapsed
+      Preparation
+         [Open Compiled INI File: 0.012s]
+      Plugin Elapsed: 0.019s
+      Usage Logging
+         [Insert: 0.257s]
+      Usage Logging: 0.262s
+   Plugin Elapsed with Usage Stats: 0.282s
+CPU - User:0.263959 (0.263959+0) System:0.008998 (0.008998+0) MyTotal:0.272957 ChildTotal:0 Total:0.272957 Elapsed:0.019 WMIC_Calls:0 WMIC_Library_Calls:0

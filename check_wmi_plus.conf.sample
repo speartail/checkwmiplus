@@ -46,6 +46,16 @@ $make_manpage_script="$base_dir/check_wmi_plus.makeman.sh"; # CHANGE THIS IF NEE
 # this is the directory where the manpage is stored when created, defaults to the same directory as the ini files
 $manpage_dir="$wmi_ini_dir"; # CHANGE THIS IF NEEDED
 
+# PRO only: set the location of where the check_wmi_plus will store some persistent data
+# - standard value "$base_dir/check_wmi_plus.data"
+$wmi_data_dir="$base_dir/check_wmi_plus.data";
+
+# PRO only: this is the file where the usage stats are stored (if using it via $collect_usage_info or --icollectusage)
+$usage_db_file="$wmi_data_dir/check_wmi_plus.usagedb";
+
+# PRO only: this is the file where the compiled ini files are stored
+$compiled_ini_file="$wmi_data_dir/check_wmi_plus.compiledini";
+
 # ---------------------- OTHER CONFIGURATION -------------------------
 
 # Disable the check of Perl Module versions
@@ -59,3 +69,32 @@ $ignore_my_outdated_perl_module_versions=0; # CHANGE THIS IF NEEDED
 # force the use of the wmic command line binary. Set to 1 to force
 # this is used if you have the wmiclient library installed but want to use the command line version
 $force_wmic_command=0; # CHANGE THIS IF NEEDED
+
+# used cached wmic responses
+# you don't really want this on unless you want to totally bypass wmic
+# some checks will totally fail with this set
+# all your check response will be inaccurate
+$use_cached_wmic_responses=0;
+
+# ------------------------ PRO Library Options -------------------------
+# PRO Only:
+# collect various usage info and store it in $usage_db_file for later analysis
+# also available by using the --icollectusage command line parameter
+# requires additional perl modules if invoked
+# turning this on adds a relatively large elapsed time penalty (relative to the execution time of the program)
+$collect_usage_info=1;
+
+# PRO Only:
+# show various usage info at end of plugin output
+# also available by using the --ishowusage command line parameter
+# requires additional perl modules if invoked
+$show_usage_info=1;
+
+# Pro Only:
+# Generate a Nagios error if there is a problem updating the usage stats
+# If set to 0, errors updating usage stats will be shown in the plugin output but will not impact the Nagios alert type
+$generate_nagios_error_for_usage_stats_problem=1;
+
+# Pro Only:
+# use compiled ini files for additional speed (reduces CPU and Elapsed times)
+$use_compiled_ini_files=1;

@@ -41,7 +41,10 @@ my $conf_file='/opt/nagios/bin/plugins/check_wmi_plus.conf';
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.54";
+our $VERSION=1.55;
+
+# which version of PRO (if used does this require)
+our $requires_PRO_VERSION=1.25;
 
 # we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
 use lib "/usr/lib/nagios/plugins";
@@ -50,40 +53,57 @@ use strict;
 use Getopt::Long;
 use Scalar::Util qw(looks_like_number);
 use Number::Format qw(:subs);
+use Data::Dumper;
+use Storable;
+use Config::IniFiles;
+use DateTime;
+
 
 # command line option declarations
-our  $opt_auth_file='';
-our  $opt_Version='';
-our  $opt_help='';
-our  $opt_mode='';
-our  $opt_submode='';
-our  $opt_username='';
-our  $opt_password='';
-our  $opt_wminamespace='root/cimv2'; # this is the default namespace
-our  $opt_warn=(); # this becomes an array reference
-our  $opt_critical=(); # this becomes an array reference
-our  @opt_include_data=(); # this becomes an array reference
-our  @opt_exclude_data=(); # this becomes an array reference
-our  @opt_extra_wmic_args=(); # extra arguments to pass to wmic
-our  $debug=0; # default value
-our  $opt_value='';
-our  $opt_z='';
-our  $opt_inihelp='';
-our  $opt_package='';
-our  $opt_keep_state=1;
-our  $opt_keep_state_id='';
-our  $opt_keep_state_expiry='3600'; # default number of seconds after which keep state results are considered expired
-our  $opt_join_state_expiry='3600'; # default number of seconds after which join state results are considered expired
-our  $opt_texthelp=0;
-our  $opt_command_examples='';
-our  $opt_ignore_versions='';
-our  $opt_ignore_auth_file_warnings='';
-our  $opt_installmodule_dir='';
+our $opt_auth_file='';
+our $opt_Version='';
+our $opt_help='';
+our $opt_mode='';
+our $opt_submode='';
+our $opt_username='';
+our $opt_password='';
+our $opt_wminamespace='root/cimv2'; # this is the default namespace
+our $opt_warn=(); # this becomes an array reference
+our $opt_critical=(); # this becomes an array reference
+our @opt_include_data=(); # this becomes an array reference
+our @opt_exclude_data=(); # this becomes an array reference
+our @opt_extra_wmic_args=(); # extra arguments to pass to wmic
+our $debug=0; # default value
+our $opt_value='';
+our $opt_z='';
+our $opt_inihelp='';
+our $opt_package='';
+our $opt_keep_state=1;
+our $opt_keep_state_id='';
+our $opt_keep_state_expiry='3600'; # default number of seconds after which keep state results are considered expired
+our $opt_join_state_expiry='3600'; # default number of seconds after which join state results are considered expired
+our $opt_texthelp=0;
+our $opt_command_examples='';
+our $opt_ignore_versions='';
+our $opt_ignore_auth_file_warnings='';
+our $opt_installmodule_dir='';
+our $opt_collect_usage='';
+our $opt_show_usage='';
+our $opt_use_cached_wmic_response='';
+our $opt_log_usage_show='';
+our $opt_log_usage_switch='';
+our $opt_log_usage_suffix='';
+our $opt_log_usage_keep='';
+our $test_mode='-1';
+our $test_mode_wmic_file='';
+
 
 # they all start with _ since later they are copied into the data array/hash and this reduces the chance they clash
 # then we have consistent usage throughout
 my %the_original_arguments=(); # used to store the original user specified command line arguments  - sometimes we change the arguments
 our %the_arguments = (
+   _mode  => '',     # just for duplicate storage of the mode (Since we actually modify the actual mode variable for ini files)
+   _submode => '',   # just for duplicate storage of the submode
    _arg1  => '',
    _arg2  => '',
    _arg3  => '',
@@ -164,9 +184,16 @@ our $make_manpage_script="$base_dir/check_wmi_plus.makeman.sh";
 # this is the directory where the manpage is stored when created, defaults to the same directory as the ini files
 our $manpage_dir="$wmi_ini_dir";
 
-# force the use of the wmic command line binary. Set to 1 to force
-# this is used if you have the wmiclient library installed but want to use the command line version
-our $force_wmic_command=0;
+# PRO only: set the location of where the check_wmi_plus will store some persistent data
+# - standard value "$base_dir/check_wmi_plus.data"
+our $wmi_data_dir="$base_dir/check_wmi_plus.data";
+
+# PRO only: this is the file where the usage stats are stored (if using it via $collect_usage_info or --icollectusage)
+our $usage_db_file="$wmi_data_dir/check_wmi_plus.usagedb";
+
+# PRO only: this is the file where the compiled ini files are stored
+our $compiled_ini_file="$wmi_data_dir/check_wmi_plus.compiledini";
+
 
 # ---------------------- OTHER CONFIGURATION -------------------------
 
@@ -177,6 +204,37 @@ our $force_wmic_command=0;
 # Setting this to 1 has the same effect as the command line option  --IgnoreMyOutDatedPerlModuleVersions
 # Setting either this to 1 or the command line option will disable the check
 our $ignore_my_outdated_perl_module_versions=0;
+
+# force the use of the wmic command line binary. Set to 1 to force
+# this is used if you have the wmiclient library installed but want to use the command line version
+our $force_wmic_command=0;
+
+# used cached wmic responses
+# you don't really want this on unless you want to totally bypass wmic
+# some checks will totally fail with this set
+# all your check response will be inaccurate
+our $use_cached_wmic_responses=0;
+
+# PRO Only:
+# collect various usage info and store it in $usage_db_file for later analysis
+# also available by using the --icollectusage command line parameter
+# requires additional perl modules if invoked
+our $collect_usage_info=1;
+
+# PRO Only:
+# show various usage info at end of plugin output (more info than is collected)
+# also available by using the --ishowusage command line parameter
+# requires additional perl modules if invoked
+our $show_usage_info=1;
+
+# Pro Only:
+# Generate a Nagios error if there is a problem updating the usage stats
+# If set to 0, errors updating usage stats will be shown in the plugin output but will not impact the Nagios alert type
+our $generate_nagios_error_for_usage_stats_problem=1;
+
+# Pro Only:
+# use compiled ini files for additional speed
+our $use_compiled_ini_files=1;
 
 # ============================= END OF DEFAULT CONFIGURATION ================================
 
@@ -374,6 +432,21 @@ my %command_examples_ini_file=(
    2  => 'WarnCritExamples.chtml',
    );
 
+
+our $wmic_calls=0;
+our $wmic_library_calls=0;
+
+our $ini_based_check=0;
+
+our $final_exit_code='';
+
+# PRO only: this is the file where we control the usage file currently written to 
+our $current_usage_db_suffix_file="$wmi_data_dir/check_wmi_plus.usagedb.suffix";
+
+# Pro flags for final decisions on usage stats
+our $i_will_show_usage_stats=0;
+our $i_will_collect_usage_info=0;
+
 #==============================================================================
 #================================== PARAMETERS ================================
 #==============================================================================
@@ -406,6 +479,7 @@ GetOptions(
    "forcewmiccommand"      => \$force_wmic_command,
    "help"                  => \$opt_help,
    "Hostname=s"            => \$the_arguments{'_host'},
+   "icollectusage!"        => \$opt_collect_usage,
    "iexamples=s"           => \$opt_command_examples,
    "IgnoreMyOutDatedPerlModuleVersions"
                            => \$opt_ignore_versions,
@@ -417,10 +491,16 @@ GetOptions(
    "installmoduledir"      => \$opt_installmodule_dir,
    "ipackage"              => \$opt_package,
    "itexthelp"             => \$opt_texthelp,
+   "ishowusage!"           => \$opt_show_usage,
+   "iusecachewmicresponse" => \$opt_use_cached_wmic_response,
    "joinexpiry=s"          => \$opt_join_state_expiry,
    "keepexpiry=s"          => \$opt_keep_state_expiry,
    "keepid=s"              => \$opt_keep_state_id,
    "keepstate!"            => \$opt_keep_state,
+   "logkeep"               => \$opt_log_usage_keep,
+   "logshow"               => \$opt_log_usage_show,
+   "logsuffix=s"           => \$opt_log_usage_suffix,
+   "logswitch"             => \$opt_log_usage_switch,
    "mode=s"                => \$opt_mode,
    "namespace=s"           => \$opt_wminamespace,
    "nodataexit=s"          => \$the_arguments{'_nodataexit'},
@@ -429,6 +509,8 @@ GetOptions(
    "otheraguments=s"       => \$the_arguments{'_arg2'},
    "password=s"            => \$opt_password,
    "submode=s"             => \$opt_submode,
+   "Testmode=i"            => \$test_mode,
+   "Twmicfile=s"           => \$test_mode_wmic_file,
    "timeout=i"             => \$the_arguments{'_timeout'},
    "username=s"            => \$opt_username,
    "value=s"               => \$opt_value,
@@ -439,6 +521,22 @@ GetOptions(
    "3arg=s"                => \$the_arguments{'_arg3'},
    "4arg=s"                => \$the_arguments{'_arg4'},
    );
+
+# see if the check_wmi_plus_lib module is available
+our $use_wmilib=0;
+
+# to see if the pro library is being used
+our $use_pro_library=0;
+
+if (-f "$conf_file_dir/check_wmi_plus_pro.pl") {
+   if (do "$conf_file_dir/check_wmi_plus_pro.pl") {
+      $debug && print "Pro Library is present\n";
+      init_pro_module();
+   } else {
+      print "Pro Library exists but does not compile: $@\n";
+      exit 1;
+   }
+}
 
 if ($opt_installmodule_dir) {
    # look for a nagios looking path in the @INC
@@ -452,18 +550,32 @@ if ($opt_installmodule_dir) {
       }
    }
    if ($install_dir) {
-      print "Linking the Plus Module to $install_dir\n";
-      `ln -s "$wmi_ini_dir/check_wmi_plus_lib.pl" "$install_dir"`;
+      print "Linking the Pro Library to $install_dir\n";
+      `ln -s "$wmi_ini_dir/check_wmi_plus_pro.pl" "$install_dir"`;
       # check its ok
-      if ( ! -l "$install_dir/check_wmi_plus_lib.pl") {
-         print "Could not successfully link the Plus Module!\n";
+      if ( ! -l "$install_dir/check_wmi_plus_pro.pl") {
+         print "Could not successfully link the Pro Library!\n";
          $install_dir='';
       }
    }
    if (! $install_dir) {
-      print "Could not automatically find a suitable directory to install the module to.\nCopy or link the Plus Module to one of the following directories:\n" . join(", ",@INC);
+      print "Could not automatically find a suitable directory to install the module to.\nCopy or link the Pro Library to one of the following directories:\n" . join(", ",@INC);
    }
    exit 1;
+}
+
+if ($opt_log_usage_switch && $use_pro_library) {
+   switch_current_usage_db();
+   exit;
+}
+if ($opt_log_usage_show && $use_pro_library) {
+   if ($i_will_collect_usage_info) {
+      my ($current_usage_db_file,$suffix)=get_current_usage_db_file();
+      print "Current Usage DB File:$current_usage_db_file\n";
+   } else {
+      print "Collection of Usage Stats is not currently enabled.\n";
+   }
+   exit;
 }
 
 if ($opt_package) {
@@ -476,7 +588,7 @@ if ($opt_package) {
    print README $output;
    close(README);
    # a bit of hard coding here .....
-   $output=`cd $base_dir;cp check_wmi_plus.conf check_wmi_plus.conf.sample;chown nagios:nagios check_wmi_plus.conf.sample;tar czvf $tarfile --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus.README.txt check_wmi_plus.conf.sample check_wmi_plus.d event_generic.pl`;
+   $output=`cd $base_dir;cp check_wmi_plus.conf check_wmi_plus.conf.sample;rm check_wmi_plus.data/check_wmi_plus.compiledini;touch check_wmi_plus.data/check_wmi_plus.compiledini;chown -R nagios:nagios *;tar czvf $tarfile --no-recursion --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus.README.txt check_wmi_plus.conf.sample check_wmi_plus.d/* check_wmi_plus.data event_generic.pl`;
    print $output;
    print "Created $base_dir/$tarfile\n";
    $output=`cd $base_dir;rm check_wmi_plus.conf.sample`;
@@ -492,72 +604,66 @@ if ($opt_ignore_versions || $ignore_my_outdated_perl_module_versions) {
    # check the versions
    my $versions_ok=check_module_versions(0);
    if (!$versions_ok) {
-      exit $ERRORS{'UNKNOWN'};
+      finish_program($ERRORS{'UNKNOWN'});
    }
 }
 
-if ($debug) {
-   use Data::Dumper; # only use module if you have to
+if ($debug || $test_mode eq '0') {
    my $command_line=join(' ',@saved_ARGV);
-   if (! $opt_z) {
-      # try and mask any user/password
-      $command_line=~s/-u\s*(\S*?)\s/-u USER /;
-      $command_line=~s/-p\s*(\S*?)\s/-p PASS /;
-   }
-   print "Command Line (v$VERSION): $0 $command_line\n";
-   print "Conf File Dir: $conf_file_dir\n";
-   print "Loaded Conf File $conf_file\n";
-   
-   if ($debug>=2) {
-      no warnings;
-      # get some info about the system
-      $wmic_delimiter='!';
-      $wmic_split_delimiter='!';
-      print "======================================== SYSTEM INFO =====================================================\n";
-      print "--------------------- Module Versions ---------------------\n";
-      check_module_versions(1);
-      print "Net::DNS - $Net::DNS::VERSION\n";
-      print "--------------------- Environment ---------------------\n";
-      print "ENV=" . Dumper(\%ENV);
-      print "--------------------- Computer System ---------------------\n";
-      get_multiple_wmi_samples(1,'',"SELECT * FROM Win32_ComputerSystem",
-      '','',my $dummy1,\$the_arguments{'_delay'},undef,0);
-      print "--------------------- Operating System ---------------------\n";
-      get_multiple_wmi_samples(1,'',"SELECT * FROM Win32_OperatingSystem",
-      '','',my $dummy2,\$the_arguments{'_delay'},undef,0);
-      $wmic_delimiter='|';
-      $wmic_split_delimiter='\|';
-      print "======================================= END SYSTEM INFO ===================================================\n";
+
+   if ($test_mode eq '0') {
+      my $test_commandline=$command_line;
+      # remove the --Testmode parameter
+      $test_commandline=~s/--Te.*?0//;
+      print "\n# ---------------------------------------------------------------------------------------------\n[" . int(rand()*10000000) . "]\ncmd=$0 $test_commandline\n";
+   } else {
+
+      if (! $opt_z) {
+         # try and mask any user/password
+         $command_line=~s/-u\s*(\S*?)\s/-u USER /;
+         $command_line=~s/-p\s*(\S*?)\s/-p PASS /;
+      }
+      print "Command Line (v$VERSION): $0 $command_line\n";
+      print "Conf File Dir: $conf_file_dir\n";
+      print "Loaded Conf File $conf_file\n";
+         
+      if ($debug>=2) {
+         no warnings;
+         # get some info about the system
+         $wmic_delimiter='!';
+         $wmic_split_delimiter='!';
+         print "======================================== SYSTEM INFO =====================================================\n";
+         print "--------------------- Module Versions ---------------------\n";
+         check_module_versions(1);
+         print "Net::DNS - $Net::DNS::VERSION\n";
+         print "--------------------- Environment ---------------------\n";
+         print "ENV=" . Dumper(\%ENV);
+         print "--------------------- Computer System ---------------------\n";
+         get_wmi_data(1,'',"SELECT * FROM Win32_ComputerSystem",
+         '','',my $dummy1,\$the_arguments{'_delay'},undef,0);
+         print "--------------------- Operating System ---------------------\n";
+         get_wmi_data(1,'',"SELECT * FROM Win32_OperatingSystem",
+         '','',my $dummy2,\$the_arguments{'_delay'},undef,0);
+         $wmic_delimiter='|';
+         $wmic_split_delimiter='\|';
+         print "======================================= END SYSTEM INFO ===================================================\n";
+      }
    }
 }
 
-# see if the check_wmi_plus_lib module is available
-our $use_wmilib='';
-eval {
-   do ("$conf_file_dir/check_wmi_plus_lib.pl");
-   init_plus_module();
-   $debug && print "Plus Lib is present\n";
-};
 
 if ($opt_command_examples) {
    show_command_examples("$wmi_ini_dir/$command_examples_ini_file{$opt_command_examples}");
    exit 0;
 }
 
-if ($opt_keep_state) {
-   use Storable; # only use the module if we have to
-}
-
 # check up on the ini file
 if ($wmi_ini_file && ! -f $wmi_ini_file) {
    print "This plugin requires an INI file. Configure its location by setting the \$wmi_ini_file variable in '$conf_file' or by using the --inifile parameter to override the default setting. Ini File currently set to '$wmi_ini_file'";
-   exit $ERRORS{"UNKNOWN"};
+   finish_program($ERRORS{'UNKNOWN'});
 } elsif ($wmi_ini_dir && ! -d $wmi_ini_dir) {
    print "This plugin requires an INI directory. Configure its location by setting the \$wmi_ini_dir variable in '$conf_file' or by using the --inidir parameter to override the default setting. Ini Directory currently set to '$wmi_ini_dir'";
-   exit $ERRORS{"UNKNOWN"};
-} else {
-   # now that we are using an ini file we need this module 
-   use Config::IniFiles; # only use module if you have to
+   finish_program($ERRORS{'UNKNOWN'});
 }
 
 if ($the_arguments{'_timeout'}) {
@@ -566,7 +672,7 @@ if ($the_arguments{'_timeout'}) {
 # Setup the trap for a timeout
 $SIG{'ALRM'} = sub {
    print "UNKNOWN - Plugin Timed out ($TIMEOUT sec). There are multiple possible reasons for this, some of them include - The host $the_arguments{_host} might just be really busy, it might not even be running Windows.\n";
-   exit $ERRORS{"UNKNOWN"};
+   finish_program($ERRORS{'UNKNOWN'});
 };
 alarm($TIMEOUT);
  
@@ -594,7 +700,7 @@ if ($opt_inihelp && !$opt_mode) {
 
 if ($opt_Version) {
    print "Version: $VERSION\n";
-   exit $ERRORS{'OK'};
+   finish_program($ERRORS{'OK'});
 }
 
 if ($opt_warn && $opt_critical && $opt_value) {
@@ -602,7 +708,7 @@ if ($opt_warn && $opt_critical && $opt_value) {
    # pass in -w SPEC -c SPEC and -v VALUE
    my ($test_result,$neww,$newc)=test_limits($opt_warn,$opt_critical,$opt_value);
    print "Overall Status Generated = $test_result ($neww,$newc)\n";
-   exit $test_result;
+   finish_program($test_result);
 }
 
 if (! $the_arguments{'_host'} && !$opt_inihelp) {
@@ -631,8 +737,14 @@ my $running_within_nagios=$ENV{'NAGIOS_PLUGIN'} || '';
 
 if (! -x $wmic_command) {
    print "This plugin requires the linux implementation of wmic eg from zenoss.\nOnce wmic is installed, configure its location by setting the \$wmic_command variable in '$conf_file'.";
-   exit $ERRORS{"UNKNOWN"};
+   finish_program($ERRORS{'UNKNOWN'});
 }
+
+$use_pro_library && endtimer('Preparation');
+
+# save the mode and submode
+$the_arguments{'_mode'}=$opt_mode;
+$the_arguments{'_submode'}=$opt_submode;
 
 # now run the appropriate sub for the check
 if (defined($mode_list{$opt_mode})) {
@@ -643,6 +755,7 @@ if (defined($mode_list{$opt_mode})) {
    if ($wmi_ini_file || $wmi_ini_dir) {
       # maybe the mode is defined in the ini file
       # read the ini file and check
+      $use_pro_library && starttimer('Read INI Files');
       my $wmi_ini=open_ini_file();
 
       my $ini_section='';
@@ -679,6 +792,7 @@ if (defined($mode_list{$opt_mode})) {
       } else {
          print "INIFILE and/or INIDIR are set but there were no ini file(s) or an error occurred trying to read them.\n";
       }
+      $use_pro_library && endtimer('Read INI Files');
       
       if ($ini_section) {
          checkini($wmi_ini,$ini_section);
@@ -696,7 +810,7 @@ if (defined($mode_list{$opt_mode})) {
 }
 
 # if we get to here we default to an OK exit
-exit $ERRORS{'OK'};
+finish_program($ERRORS{'OK'});
 
 #==============================================================================
 #================================== FUNCTIONS =================================
@@ -740,33 +854,66 @@ return $versions_ok;
 sub open_ini_file {
 my $ini_file;
 
-$debug && print "Opening Ini Files ...\n";
+my $ini_is_new=0;
 
-if ($wmi_ini_file) {
-   # firstly open the ini file configured 
-   $debug && print "   opening first ini file: $wmi_ini_file\n";
-   $ini_file=new Config::IniFiles( -file=>$wmi_ini_file, -allowcontinue=>1 );
+if ($use_pro_library && $use_compiled_ini_files) {
+   # when using pro we can compile the ini files so that we don't have to open and parse them all everytime we run
+   $debug && print "Trying to use Pro compiled ini files ....\n";
+   if (-s $compiled_ini_file) {
+      $debug && print "Using Pro compiled ini file\n";
+      $ini_file=use_compiled_ini_files();
+   } else {
+      $debug && print "No existing Pro compiled ini file\n";
+   }
 }
 
-if ($wmi_ini_dir) {
-   # see what ini files are available in the dir
-   my @ini_list=get_files_from_dir($wmi_ini_dir,'\.ini$');
-   my $ini_count=$#ini_list+1;
-   $debug && print "   checking ini dir $wmi_ini_dir, found $ini_count file(s)\n";
-   foreach my $ini (@ini_list) {
-      # open this ini file and it will be merged with and override any clashing settings in previously opened ini files
-      my $next_ini_file;
-      if (defined($ini_file)) {
-         # there is a previous ini file so we need to -import it
-         $debug && print "   opening ini file: $ini\n";
-         $next_ini_file=new Config::IniFiles( -file=>"$wmi_ini_dir/$ini", -allowcontinue=>1, -import=>$ini_file );
-      } else {
-         # no previous ini file so do not use the -import
-         $debug && print "   opening first ini file: $ini\n";
-         $next_ini_file=new Config::IniFiles( -file=>"$wmi_ini_dir/$ini", -allowcontinue=>1);
-      }
-      $ini_file=$next_ini_file;
+if (!$ini_file) {
+
+   $use_pro_library && starttimer('Open INI Files');
+   $debug && print "Opening Ini Files ...\n";
+   
+   if ($wmi_ini_file) {
+      # firstly open the ini file configured 
+      $debug && print "   opening first ini file: $wmi_ini_file\n";
+      $ini_file=new Config::IniFiles( -file=>$wmi_ini_file, -allowcontinue=>1 );
+      $ini_is_new=1;
    }
+   
+   if ($wmi_ini_dir) {
+      # see what ini files are available in the dir
+      my @ini_list=get_files_from_dir($wmi_ini_dir,'\.ini$');
+      my $ini_count=$#ini_list+1;
+      $debug && print "   checking ini dir $wmi_ini_dir, found $ini_count file(s)\n";
+      foreach my $ini (@ini_list) {
+         # open this ini file and it will be merged with and override any clashing settings in previously opened ini files
+         my $next_ini_file;
+         if (defined($ini_file)) {
+            # there is a previous ini file so we need to -import it
+            $debug && print "   opening ini file: $ini\n";
+            $next_ini_file=new Config::IniFiles( -file=>"$wmi_ini_dir/$ini", -allowcontinue=>1, -import=>$ini_file );
+         } else {
+            # no previous ini file so do not use the -import
+            $debug && print "   opening first ini file: $ini\n";
+            $next_ini_file=new Config::IniFiles( -file=>"$wmi_ini_dir/$ini", -allowcontinue=>1);
+         }
+         
+         if (!defined($next_ini_file)) {
+            # got an error parsing the ini file
+            print "There is a problem reading the ini file: $ini. The error(s) are:\n" . join("\n",@Config::IniFiles::errors);
+            finish_program($ERRORS{'UNKNOWN'});
+         }
+         
+         $ini_file=$next_ini_file;
+         $ini_is_new=1;
+      }
+   }
+   $use_pro_library && endtimer('Open INI Files');
+}
+
+if ($ini_is_new && $use_pro_library && $use_compiled_ini_files) {
+   # we've just read the ini files and we are using the pro library so we can compile them
+   $debug && print "Trying to use Pro to compile ini files ....\n";
+   compile_ini_files($ini_file);
 }
 
 return $ini_file;
@@ -796,7 +943,7 @@ sub show_command_examples {
 # the name of the template file to process
 my ($example_file)=@_;
 
-my $base_command="$0 -H $the_arguments{'_host'} -u $opt_username -p $opt_password";
+my $base_command="$0 -H $the_arguments{'_host'} -u $opt_username -p $opt_password --noishow --noicollect";
 my $exe_dir=$0;
 $exe_dir=~s/^(.*)\/(.*?)$/$1\//;
 
@@ -977,18 +1124,17 @@ foreach my $ini_mode (sort @ini_modes) {
       print "$display\n";
    }
 }
-exit $ERRORS{'UNKNOWN'};
+finish_program($ERRORS{'UNKNOWN'});
 }
 #-------------------------------------------------------------------------
 sub short_usage {
 my ($no_exit)=@_;
 print <<EOT;
-Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-w WARN] [-c CRIT]
-Full Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand]
+Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow]
 EOT
 if (!$no_exit) {
    print "Help as a Manpage: --help\nHelp as Text: --itexthelp\n";
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 }
 #-------------------------------------------------------------------------
@@ -1051,7 +1197,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD [-A AUTHFILE] -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--includedata DATASPEC] [--excludedata DATASPEC] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp] [--forcewmiccommand]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow]
  
  Help as a Manpage:  
  
@@ -1144,6 +1290,18 @@ LESS COMMONLY USED OPTIONS
  -d  Enable debug. Use this to see a lot more of what is going on including the exact WMI Query and results. User/passwords should be masked in the resulting output unless -z is specified.
  
  --forcewmiccommand  Force the use of the wmic binary instead of using the WMI Client library. The WMI Client library is used automatically (since it is faster) if it is available on the host running check_wmi_plus. You can tell if you are using the library or the binary wmic by examining the output of -d.
+
+--ishowusage  Pro Version only. Show usage stats in plugin output.
+
+--icollectusage  Pro Version only. Collect usage stats.
+
+--logswitch  Pro Version only. Switch usage DB file.
+
+--logkeep  Pro Version only. do not remove the Usage DB file you are switching to.
+
+--logsuffix SUFFIX  Pro Version only. Switch to the Usage DB file using SUFFIX.
+
+--logshow  Pro Version only. Show current Usage DB file.
 
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc.
@@ -1492,7 +1650,7 @@ EOT
 # add the inihelp to the end of this help
 show_ini_help_overview(1);
 
-exit $ERRORS{'UNKNOWN'};
+finish_program($ERRORS{'UNKNOWN'});
 }
 #-------------------------------------------------------------------------
 sub display_uptime {
@@ -1545,16 +1703,6 @@ if ($incoming ne '' && looks_like_number($incoming)) {
 }
 }
 #-------------------------------------------------------------------------
-sub get_multiple_wmi_samples {
-# wrapper sub for getting wmi data 
-if ($use_wmilib) {
-   # use the one from the Plus Module
-   return get_wmi_data_with_lib(@_);
-} else {
-   return get_wmi_data(@_);
-}
-}
-#-------------------------------------------------------------------------
 sub get_wmi_data {
 # perform the same WMI query 1 or more times with a time delay in between and return the results in an array
 # good for using RAW performance data and gives me a standard way to perform queries and have the results loaded into a known structure
@@ -1604,7 +1752,7 @@ if ($$specified_delay) {
    # all good - we assume
    } else {
       print "Delay not specified correctly. Should be a number >= zero.\n";
-      exit $ERRORS{'UNKNOWN'};
+      finish_program($ERRORS{'UNKNOWN'});
    }
 }
 
@@ -1686,7 +1834,7 @@ if ($opt_username && $opt_password) {
          print "Perl says that current Effetive Login ID = $> (Real = $<)\n";
          print "Perl says that current Group ID = $) (Real = $()\n";
       }
-      exit $ERRORS{'UNKNOWN'};
+      finish_program($ERRORS{'UNKNOWN'});
    }
 }
 
@@ -1717,10 +1865,9 @@ if ($opt_keep_state && $num_samples>1) {
    # keep state mode only works if you specifiy the command line option and you need more than one WMI sample
    # make up a file name that will be unique to the check and various parameters
    # $opt_keep_state_id is just in case the user needs a more unique file name
-   my $keep_state_file_name="cwpss_${opt_mode}_${the_arguments{'_host'}}_${the_arguments{'_arg1'}}_${the_arguments{'_arg2'}}_${the_arguments{'_arg3'}}.${opt_keep_state_id}";
-   $keep_state_file_name=~s/\W*//g;
-   $keep_state_file_name="$keep_state_file_name.state";
-   $keep_state_file="$tmp_dir/$keep_state_file_name";
+   $keep_state_file="cwpss_${opt_mode}_${opt_submode}_${the_arguments{'_host'}}_${the_arguments{'_arg1'}}_${the_arguments{'_arg2'}}_${the_arguments{'_arg3'}}.${opt_keep_state_id}";
+   $keep_state_file=~s/\W*//g;
+   $keep_state_file="$tmp_dir/$keep_state_file.state";
    $debug && print "Starting Keep State Mode\nSTATE FILE: $keep_state_file\n";
 
    if ( ! -s $keep_state_file) {
@@ -1734,7 +1881,7 @@ if ($opt_keep_state && $num_samples>1) {
       my $expiry_limit=$time_now-$opt_keep_state_expiry;
 
       my $stored_results;
-      eval { $stored_results=retrieve($keep_state_file); };
+      eval {   $stored_results=retrieve($keep_state_file);  };
       if ($@) {
          # we seem to have got an error with the retrieve
          # check the fileage of the file
@@ -1747,7 +1894,7 @@ if ($opt_keep_state && $num_samples>1) {
          } else {
             # some other error
             print "There was a problem retrieving the previous state data ($keep_state_file). If this error persists you may need to remove the state data file. The error message was: $@";
-            exit $ERRORS{'UNKNOWN'};
+            finish_program($ERRORS{'UNKNOWN'});
          }
       }
       
@@ -1812,13 +1959,94 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
       $cmd=~s/-U$wmi_query_quote $wmi_query_quote(.*?)%(.*?)$wmi_query_quote /-U${wmi_query_quote} ${wmi_query_quote}USER%PASS${wmi_query_quote} /;
       }
       print "Round #" . ($i+1) . " of $num_samples\n";
-      print "QUERY: $cmd\n";
+      if ($use_wmilib && ! $force_wmic_command) {
+         print "Using wmiclient library but displaying command line equivalent\nQUERY:$cmd\n";
+      } else {
+         print "QUERY: $cmd\n";
+      }
    }
+   $test_mode >= '0' && print "wmiccmd=$wmi_commandline\n";
 
-   $output = `$wmi_commandline 2>&1`;
+   my $wmic_cache_file="";
+   my $run_wmic=1;
+   if ($opt_use_cached_wmic_response || $use_cached_wmic_responses) {
+      # if this option is set then we want to use the cached wmic response and not actually call wmic itself
+      # we can only used the cached response if the cache file for this check exists
+      
+      # build up the cache file name
+      $wmic_cache_file="cwpwc_${opt_mode}_${opt_submode}_${the_arguments{'_host'}}_${the_arguments{'_arg1'}}_${the_arguments{'_arg2'}}_${the_arguments{'_arg3'}}.${opt_keep_state_id}";
+      $wmic_cache_file=~s/\W*//g;
+      $wmic_cache_file="$tmp_dir/$wmic_cache_file.wmiccache";
+      $debug && print "WMIC Cache File Name: $wmic_cache_file\n";
+      
+      if ( -f $wmic_cache_file) {
+         my $last_results_ref;
+         eval {   $last_results_ref=retrieve($wmic_cache_file);   };
+         if ($@) {
+            # we seem to have got an error with the retrieve
+            # since this is a sort of debug mode we are not too concerned
+            # we'll just rerun wmic and try and store the results again
+            print "WARNING - Unable to retrieve cache WMIC results from file $wmic_cache_file. ";
+         } else {
+            # only don't run wmic if we have retrieved some previous results
+            $run_wmic=0;
+            # set the output to be the whatever we retrieved
+            $output=$$last_results_ref;
+            $debug && print "Using last cached WMIC response\n";
+         }
+      } else {
+         $debug && print "No existing WMIC response, will cache this one\n";
+      }
+   }
+   
+   if ($run_wmic) {
+      if ($test_mode && $test_mode_wmic_file) {
+         # we don't actually run wmic - we just pretend we do
+         # we get the wmic output from a file
+         if (open (WMICO,$test_mode_wmic_file)) {
+            my @wmic_data=<WMICO>;
+            $debug && print "Using Test Mode wmic output from $test_mode_wmic_file\n";
+            $output=join('',@wmic_data);
+            close(WMICO);
+         } else {
+            die("Can't get Test Mode WMIC Output from $test_mode_wmic_file\n");
+         }
+      } elsif ($use_wmilib && ! $force_wmic_command) {
+         # add the debug parameter so that we get better output for when errors occur
+         # push(@wmi_args,'-d','0');
+         # get the wmi data using the library
+         my $exitcode='';
+         my %extraargs=(
+            Timeout  => $TIMEOUT,
+            );
+         starttimer('wmic library');
+         ($exitcode,$output) = invoke_wmiclient(\%extraargs, \@wmi_args);
+         endtimer('wmic library');
+         $wmic_library_calls++;
+         $debug && print "WMIClient Lib Exit Code = $exitcode\n";
+      } else {
+         # get the wmi data using the command line
+         $use_pro_library && starttimer('wmic');
+         $output = `$wmi_commandline 2>&1`;
+         $use_pro_library && endtimer('wmic');
+         $wmic_calls++;
+      }
+
+      if ($opt_use_cached_wmic_response || $use_cached_wmic_responses) {
+         # if this option is set then we want to store the wmic response for the next time we are supposed to call wmic
+         $debug && print "Caching WMIC response for next run\n";
+         eval {
+            my $out=\$output;
+            store($out,$wmic_cache_file);
+         };
+         check_for_store_errors($@);
+         
+      }
+   }
 
    $all_output.=$output;
    $debug && print "OUTPUT: $output\n";
+   $test_mode eq '0' && print "wmicoutput1=<<EOT\n${all_output}\nEOT\noutputstring1=<<EOT\n";
 
    # now we have to verify and parse the returned query
    # a valid return query comes back in the following format
@@ -1940,7 +2168,8 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                # now we have matched a result row, so break it up into fields
                my $row_data_valid=1;
                my $row_data=$1; # this is the entire string matched (only works if $use_split=1)
-               $debug && print "\nLooking at Data Row: $&";
+               # use of $& slows down all program regexes - only turn this on if needed
+               # $debug && print "\nLooking at Data Row: $&";
                if ($use_split) {
                   @field_data=split(/$wmic_split_delimiter/,$row_data);
                   
@@ -2056,13 +2285,11 @@ if ($keep_state_mode==1) {
    # add a create timestamp to the data
    $$results[0][0]{'_KeepStateCreateTimestamp'}=$time_now;
    $debug && print "Storing WMI results in the state file for the first time\n";
-   eval {
-      store($results,$keep_state_file);
-   };
+   eval {   store($results,$keep_state_file);   };
    check_for_store_errors($@);
    # now exit the plugin with an unknown state since we only have the first lot of WMI data
    print "Collecting first WMI sample because $get_data_for_the_first_time. Results will be shown the next time the plugin runs.\n";
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 } elsif ($keep_state_mode==2) {
    # we retrieved WMI data this time round from the file
    # we then did one more WMI query to get a complete set
@@ -2086,9 +2313,7 @@ if ($keep_state_mode==1) {
    $$stored_results[0][0]{'_KeepStateCreateTimestamp'}=time();
    # now store the data
    $debug && print "Storing new WMI results in the state file " . Dumper($stored_results);
-   eval {
-      store($stored_results,$keep_state_file);
-   };
+   eval {   store($stored_results,$keep_state_file);   };
    check_for_store_errors($@);
 }
 
@@ -2377,9 +2602,9 @@ if ($the_arguments{'_nodatamode'}) {
       # we exit with the value the user specified in $the_arguments{'_nodataexit'}, if any
       if ($the_arguments{'_nodataexit'} ge 0 && $the_arguments{'_nodataexit'} le 3) {
          $debug && print "Exit with user defined exit code $the_arguments{'_nodataexit'}\n";
-         exit $the_arguments{'_nodataexit'};
+         finish_program($the_arguments{'_nodataexit'});
       } else {
-         exit $ERRORS{'CRITICAL'};
+         finish_program($ERRORS{'CRITICAL'});
       }
    }
 }
@@ -2814,10 +3039,14 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
 if ($@) {
    # some calc got an error
    if ($@=~/division by zero/) {
-      print "Divide by Zero error. Sometimes this happens if you are using a Win32_PerfFormattedData class when you should be using a Win32_PerfRAWData class (this check will continually get this error). It can also happen if the 2nd WMI query, for a check that requires 2 WMI queries, fails (this might be a transient problem). Also, you might have forgotten to include a time-based field (eg Timestamp_Sys100NS, Frequency_Sys100NS), which is required for the calculation, in your WMI query.";
+      if ($opt_use_cached_wmic_response || $use_cached_wmic_responses) {
+         print "Divide by Zero error. This is a direct result of using cached WMIC responses. This particular check requires different WMI data to work correctly.";
+      } else {
+         print "Divide by Zero error. Sometimes this happens if you are using a Win32_PerfFormattedData class when you should be using a Win32_PerfRAWData class (this check will continually get this error). It can also happen if the 2nd WMI query, for a check that requires 2 WMI queries, fails (this might be a transient problem). Also, you might have forgotten to include a time-based field (eg Timestamp_Sys100NS, Frequency_Sys100NS), which is required for the calculation, in your WMI query.";
+      }
    }
    print "The actual error text is: $@ ";
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 
 }
@@ -2976,7 +3205,7 @@ if ($data_errors) {
       print "There was an error while trying to store the state data. ";
    }
    print "The actual error text is: $data_errors";
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 }
 #-------------------------------------------------------------------------
@@ -3015,7 +3244,7 @@ if ($data_errors) {
       print " The error text from wmic is: ";
    }
    print $data_errors;
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 }
 #-------------------------------------------------------------------------
@@ -3286,6 +3515,7 @@ my ($wmi_ini,$ini_section)=@_;
 # the config::inifiles object
 # the section name in the ini file we have to process
 $debug && print "Processing INI Section: $ini_section\n";
+$use_pro_library && starttimer('Process INI Check');
 
 # change the $opt_mode to be the same as the section name
 # we need this since some things look up values by $opt_mode
@@ -3298,6 +3528,10 @@ my $query=$wmi_ini->val($ini_section,'query','');
 
 if ($query) {
 
+   $use_pro_library && starttimer('Preparation');
+   
+   $ini_based_check=1;
+   
    # see if there are any WMI join queries
    # these come in 2 separate fields, join= and joinquery=
    my @join_config_list=$wmi_ini->val($ini_section,'join',undef);
@@ -3333,7 +3567,7 @@ if ($query) {
       if ($VERSION < $requires_version) {
          # this is a problem
          print "This check ($opt_mode) requires at least version $requires_version of the plugin\nThere are probably features implemented in that version that this check uses.\n";
-         exit $ERRORS{'UNKNOWN'};
+         finish_program($ERRORS{'UNKNOWN'});
       }
       
       # if --inihelp has been specified then show the help for this mode
@@ -3385,8 +3619,10 @@ if ($query) {
       # prepare the query extension if any
       $query=process_queryextention_fields_list($query,\@query_extenstion_list);
 
+      $use_pro_library && endtimer('Preparation');
+
       my @collected_data;
-      my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples($number_wmi_samples,$ini_namespace,$query,
+      my ($data_errors,$last_wmi_data_index)=get_wmi_data($number_wmi_samples,$ini_namespace,$query,
          $custom_header_regex,$custom_data_regex,\@collected_data,\$the_arguments{'_delay'},\@calc_array,$wmi_ini->val($ini_section,'slashconversion',''));
       
       check_for_data_errors($data_errors);
@@ -3399,6 +3635,7 @@ if ($query) {
 
       no_data_check($collected_data[$last_wmi_data_index][0]{'_ItemCount'});
 
+      $use_pro_library && starttimer('Post Processing');
       my $data_alignment_fields=$wmi_ini->val($ini_section,'aligndata','');
       if ($data_alignment_fields) {
          align_data(\@collected_data,$last_wmi_data_index,$data_alignment_fields);
@@ -3460,16 +3697,18 @@ if ($query) {
       my $overall_combined_data=combine_display_and_perfdata($overall_display_info,$overall_performance_data);
       print $overall_combined_data;
    
-      exit $overall_test_result;
+      $use_pro_library && endtimer('Post Processing');
+      $use_pro_library && endtimer('Process INI Check');
+      finish_program($overall_test_result);
       
    } else {
       print "UNKNOWN - No predisplay or display field(s) specified in ini file section '$ini_section'\n";
-      exit $ERRORS{'UNKNOWN'};
+      finish_program($ERRORS{'UNKNOWN'});
    }
 
 } else {
    print "UNKNOWN - Query not specified in ini file section '$ini_section'\n";
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 
 }
@@ -3477,7 +3716,7 @@ if ($query) {
 sub checkgeneric {
 # I use this when I am playing around ........
 my @collected_data;
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "SELECT * FROM Win32_PerfFormattedData_PerfDisk_PhysicalDisk where name = \"c:\"",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
@@ -3486,7 +3725,7 @@ my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_da
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
 
-exit $test_result;
+finish_program($test_result);
 
 }
 #-------------------------------------------------------------------------
@@ -3498,7 +3737,7 @@ if ($the_arguments{'_delay'} eq '') {
 }
 
 my @collected_data;
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(2,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(2,'',
    "select PercentProcessorTime,Timestamp_Sys100NS from Win32_PerfRawData_PerfOS_Processor where Name=\"_Total\"",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
@@ -3511,7 +3750,7 @@ my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_da
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
 
-exit $test_result;
+finish_program($test_result);
 }
 #-------------------------------------------------------------------------
 sub checknetwork {
@@ -3540,7 +3779,7 @@ if ($the_arguments{'_arg1'} eq '') {
    # only need 1 WMI query when _arg1 not specified
    $num_samples=1; 
 }
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples($num_samples,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data($num_samples,'',
    "select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,Frequency_Sys100NS,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfRawData_Tcpip_NetworkInterface",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
@@ -3639,10 +3878,10 @@ if ($collected_data[$last_wmi_data_index][0]{'_NumInterfaces'}>0) {
    
    print $overall_combined_data;
    
-   exit $overall_test_result;
+   finish_program($overall_test_result);
 } else {
    print "No Network Interfaces specified. Valid Interface Names are:\n" . list_collected_values_from_all_rows(\@collected_data,['Name','NetConnectionID','IPAddress','MACAddress'],"\n",', ',0) . "\nSpecify the -a parameter with an adapter name. Use ' ' around the adapter name.\n";
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 
 }
 
@@ -3663,7 +3902,7 @@ if (!$the_arguments{'_arg1'}) {
 $opt_keep_state=0;
 
 my @collected_data;
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples($the_arguments{'_arg1'},'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data($the_arguments{'_arg1'},'',
    "select ProcessorQueueLength from Win32_PerfRawData_PerfOS_System",
    '','',\@collected_data,\$the_arguments{'_delay'},[ 'ProcessorQueueLength' ],0);
 
@@ -3675,7 +3914,7 @@ $collected_data[$last_wmi_data_index][0]{'_CPUQPoints'}=list_collected_values_fr
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
-exit $test_result;
+finish_program($test_result);
 
 }
 #-------------------------------------------------------------------------
@@ -3725,7 +3964,7 @@ return %lookup_results;
 #
 #my @collected_data;
 #
-#my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+#my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
 #   "Select dnsdomain,dnshostname,ipaddress,ipsubnet,macaddress,description from Win32_NetworkAdapterConfiguration",
 #   '','',\@collected_data,\$the_arguments{'_delay'},undef,1);
 #
@@ -3791,7 +4030,7 @@ return %lookup_results;
 #my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 #print $this_combined_data;;
 #
-#exit $test_result;
+#finish_program($test_result);
 #}
 #-------------------------------------------------------------------------
 sub checkmem {
@@ -3810,7 +4049,7 @@ if ($the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i || ($opt_submode e
    #515204|Microsoft Windows XP Professional|C:\WINDOWS|\Device\Harddisk0\Partition1|1228272   
    # this means that we need to specify a regular expression to retrieve the data since there are more fields in the data than column headings
    # we only want data fields 1 4 5 so that we match the column headings
-   ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+   ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select Name,FreePhysicalMemory,TotalVisibleMemorySize from Win32_OperatingSystem",
    '','1,4,5',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
@@ -3824,7 +4063,7 @@ if ($the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i || ($opt_submode e
    print "This Mode is no longer used as it was proven to be inaccurate. Automatically using -m checkpage instead. ";
    $opt_mode='checkpage';
    &checkpage();
-   exit $ERRORS{'UNKNOWN'}; # should never get here
+   finish_program($ERRORS{'UNKNOWN'}); # should never get here
    
    # This is the old check ............
    #   $collected_data[0][0]{'MemType'}='Page File';
@@ -3834,7 +4073,7 @@ if ($the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i || ($opt_submode e
    #   #2051912|Microsoft Windows XP Professional|C:\WINDOWS|\Device\Harddisk0\Partition1|2097024
    #   # this means that we need to specify a regular expression to retrieve the data since there are more fields in the data than column headings
    #   # we only want data fields 1 4 5 so that we match the column headings
-   #   $data_errors=get_multiple_wmi_samples(1,'',
+   #   $data_errors=get_wmi_data(1,'',
    #   "Select Name,FreeVirtualMemory,TotalVirtualMemorySize from Win32_OperatingSystem",
    #   '','1,4,5',\@collected_data,\$the_arguments{'_delay'},undef,0);
    #
@@ -3845,7 +4084,7 @@ if ($the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i || ($opt_submode e
 
 } else {
    print "UNKNOWN - invalid SUBMODE in the checkmem function - should be page or physical.\n";
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 
 check_for_data_errors($data_errors);
@@ -3863,7 +4102,7 @@ my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_da
    
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
-exit $test_result;
+finish_program($test_result);
   
 }
 #-------------------------------------------------------------------------
@@ -3872,7 +4111,7 @@ sub checkpage {
 my @collected_data;
 my @page_size_mapping;
 
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select AllocatedBaseSize,CurrentUsage,PeakUsage from Win32_PageFileUsage",
    '','',\@collected_data,\$the_arguments{'_delay'},['CurrentUsage','AllocatedBaseSize', 'PeakUsage'],0);
 
@@ -3997,10 +4236,10 @@ if ($results_text) {
    $overall_combined_data=combine_display_and_perfdata("$overall_display_info$results_text",$performance_data);
    print $overall_combined_data;
 
-   exit $exit_type;
+   finish_program($exit_type);
 } else {
    print "UNKNOWN - Could not find a drive matching '$the_arguments{'_arg2'}' or the WMI data returned is invalid. Available Page Files are " . list_collected_values_from_all_rows(\@collected_data,['Name'],', ','',0);
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 
 }
@@ -4010,8 +4249,6 @@ sub checkfileage {
 # its a good idea and we modified to for our use using our programming techniques and 
 # ensuring that the warning/critical criteria were consistently used
 # this is where we also first introduced the time multipliers
-
-use DateTime;
 
 my $perf_data_unit='hr'; # default unit is hours
 # if the user specifies it but it is not valid we silently fail
@@ -4026,7 +4263,7 @@ $opt_z='';
 
 my @collected_data;
 
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select name,lastmodified from CIM_DataFile where name=\"$the_arguments{'_arg1'}\"",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,1);
 
@@ -4061,21 +4298,21 @@ if ($collected_data[$last_wmi_data_index][0]{'Name'}) {
       my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
       print $this_combined_data;
       
-      exit $test_result;
+      finish_program($test_result);
    } else {
       print "UNKNOWN - Could not correct recognise the returned time format $lastmodified";
-      exit $ERRORS{'UNKNOWN'};
+      finish_program($ERRORS{'UNKNOWN'});
    }
 } else {
    print "UNKNOWN - Could not find the file $the_arguments{'_arg1'}";
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
    
 }
 #-------------------------------------------------------------------------
 sub checkfilesize {
 my @collected_data;
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select name,filesize from CIM_DataFile where name=\"$the_arguments{'_arg1'}\"",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,1);
 
@@ -4091,7 +4328,7 @@ my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_da
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;;
 
-exit $test_result;
+finish_program($test_result);
 }
 #-------------------------------------------------------------------------
 sub checkfoldersize {
@@ -4109,7 +4346,7 @@ if ($the_arguments{'_arg1'}=~/^(\w:)(.*)/) {
    $path=$2;
 } else {
    print "Could not extract drive letter and path from $the_arguments{'_arg1'}\n";
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 
 my $wildcard='';
@@ -4125,7 +4362,7 @@ if (defined($the_arguments{'_arg4'})) {
 
 my @collected_data;
 
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select name,filesize from CIM_DataFile where drive=\"$drive_letter\" AND path $operator \"${path}$wildcard\"",
    '','',\@collected_data,\$the_arguments{'_delay'},['FileSize'],1);
 
@@ -4147,20 +4384,19 @@ my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_da
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
 
-exit $test_result;
+finish_program($test_result);
 }
 #-------------------------------------------------------------------------
 sub checkwsusserver {
 
 print "This mode has been removed. Read the --help to see how to perform the equivalent check";
-exit $ERRORS{'CRITICAL'};
+finish_program($ERRORS{'CRITICAL'});
 
-use DateTime;
 my $age = DateTime->now(time_zone => 'local')->subtract(hours => 24);
 my $where_time_part="TimeGenerated > \"" . $age->year . sprintf("%02d",$age->month) . sprintf("%02d",$age->day) . sprintf("%02d",$age->hour) . sprintf("%02d",$age->minute) . "00.00000000\""; # for clarity
 
 my @collected_data;
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select SourceName,Message from Win32_NTLogEvent where Logfile=\"Application\" and EventType < 2 and SourceName = \"Windows Server Update Services\" and $where_time_part",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
@@ -4169,7 +4405,7 @@ check_for_data_errors($data_errors);
 if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}==0) {
    # nothing returned, assume all ok
    print "OK - WSUS Database clean.\n";
-   exit $ERRORS{'OK'};
+   finish_program($ERRORS{'OK'});
 } else {
    my $output;
    $output =~ s/\r(Application)\|/Application\|/g;
@@ -4179,7 +4415,7 @@ if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}==0) {
    $output =~ s/(Application)-/\n\nApplication-/g;
    $output = substr($output, 64);
    print "CRITICAL: WSUS Server has errors, check eventlog for download failures, database may need to be purged by running the Server Cleanup Wizard.\|;\n$output";
-   exit $ERRORS{'CRITICAL'};
+   finish_program($ERRORS{'CRITICAL'});
 }
 
 }
@@ -4216,7 +4452,7 @@ $process_exclude_regex=~s#\/#\\\\#g;
 
 
 my @collected_data;
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "select Name,CommandLine,ExecutablePath from Win32_Process",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
@@ -4288,7 +4524,7 @@ if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}>0) {
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 
 print $this_combined_data;
-exit $test_result;
+finish_program($test_result);
 }
 #-------------------------------------------------------------------------
 sub checkservice {
@@ -4316,7 +4552,7 @@ if (lc($the_arguments{'_arg1'}) eq 'auto') {
 # Security Center|wscsvc|True|Auto|Running|OK
 
 my @collected_data;
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "select displayname, Started, StartMode, State, Status FROM Win32_Service $where_bit",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
@@ -4382,7 +4618,7 @@ my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_da
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
 
-exit $test_result;
+finish_program($test_result);
 
 }
 #-------------------------------------------------------------------------
@@ -4423,14 +4659,14 @@ if ($the_arguments{'_arg1'}) {
          foreach my $code (sort keys %smartattributes) {
             print "$code ($smartattributes{$code})  ";
          }
-         exit $ERRORS{'UNKNOWN'};
+         finish_program($ERRORS{'UNKNOWN'});
       }
       %smartattributes=%new_smartattributes;
    }
 }
 
 # first get the smart status
-($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'root/wmi',
+($data_errors,$last_wmi_data_index)=get_wmi_data(1,'root/wmi',
    "Select Active,InstanceName,PredictFailure from MSStorageDriver_FailurePredictStatus",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 check_for_data_errors($data_errors);
@@ -4532,7 +4768,7 @@ my ($overall_display_info,$overall_performance_data,$overall_combined_data)=crea
 $overall_combined_data=combine_display_and_perfdata("$overall_display_info\n$results_text",$performance_data);
 print $overall_combined_data;
 
-exit $overall_test_result;
+finish_program($overall_test_result);
 }
 #-------------------------------------------------------------------------
 sub checkuptime {
@@ -4541,7 +4777,7 @@ my @collected_data;
 #CLASS: Win32_PerfFormattedData_PerfOS_System
 #SystemUpTime
 #33166
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select SystemUpTime,Frequency_Sys100NS,Timestamp_Object from Win32_PerfRawData_PerfOS_System",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
@@ -4570,12 +4806,12 @@ if ($critical_perf_specs_parsed{'_UptimeSec'} ne '') {
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
 
-exit $test_result;
+finish_program($test_result);
 }
 #-------------------------------------------------------------------------
 sub checkdrivesize {
 my @collected_data;
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select DeviceID,freespace,Size,VolumeName from Win32_LogicalDisk where DriveType=3",
    '','',\@collected_data,\$the_arguments{'_delay'},['FreeSpace','Size'],0);
 
@@ -4684,22 +4920,22 @@ if ($results_text) {
    my $combined_string=combine_display_and_perfdata($results_text,$performance_data);
    print $combined_string;
    if ($num_critical>0) {
-      exit $ERRORS{'CRITICAL'};
+      finish_program($ERRORS{'CRITICAL'});
    } elsif ($num_warning>0) {
-      exit $ERRORS{'WARNING'};
+      finish_program($ERRORS{'WARNING'});
    } else {
-      exit $ERRORS{'OK'};
+      finish_program($ERRORS{'OK'});
    }
 } else {
    print "UNKNOWN - Could not find a drive matching '$the_arguments{'_arg1'}' or the WMI data returned is invalid. Available Drives are " . list_collected_values_from_all_rows(\@collected_data,['DeviceID'],', ','',0);
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 
 }
 #-------------------------------------------------------------------------
 sub checkvolsize {
 my @collected_data;
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select Capacity,DeviceID,DriveLetter,DriveType,FileSystem,FreeSpace,Label,Name from Win32_Volume where DriveType=3",
    '','',\@collected_data,\$the_arguments{'_delay'},['FreeSpace','Capacity'],0);
 
@@ -4797,15 +5033,15 @@ if ($results_text) {
    my $combined_string=combine_display_and_perfdata($results_text,$performance_data);
    print $combined_string;
    if ($num_critical>0) {
-      exit $ERRORS{'CRITICAL'};
+      finish_program($ERRORS{'CRITICAL'});
    } elsif ($num_warning>0) {
-      exit $ERRORS{'WARNING'};
+      finish_program($ERRORS{'WARNING'});
    } else {
-      exit $ERRORS{'OK'};
+      finish_program($ERRORS{'OK'});
    }
 } else {
    print "UNKNOWN - Could not find a volume matching '$the_arguments{'_arg1'}'. Available Volumes are " . list_collected_values_from_all_rows(\@collected_data,['Name'],', ','',0);
-   exit $ERRORS{'UNKNOWN'};
+   finish_program($ERRORS{'UNKNOWN'});
 }
 
 }
@@ -4889,7 +5125,6 @@ if (!defined($the_arguments{'_arg4'})) {
    $the_arguments{'_arg4'}='eventdefault';
 }
 
-use DateTime;
 # the date and time are stored in GMT in the event log so we need to query it based on that
 my $age = DateTime->now(time_zone => 'gmt')->subtract(hours => $the_arguments{'_arg3'});
 my $where_time_part="TimeGenerated > \"" . $age->year . sprintf("%02d",$age->month) . sprintf("%02d",$age->day) . sprintf("%02d",$age->hour) . sprintf("%02d",$age->minute) . "00.00000000\""; # for clarity
@@ -4899,8 +5134,8 @@ my @collected_data;
 # records come back like this
 #Logfile|Message|RecordNumber|SourceName|TimeGenerated|Type
 #System|Printer 5D PDF Creator (from MATTHEW) was deleted.|101949|Print|20110521153921.000000+600|warning
-my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
-   "Select EventIdentifier,Type,LogFile,SourceName,Message,TimeGenerated from Win32_NTLogEvent where ( $logfile_wherebit ) and $severity_wherebit and $where_time_part",
+my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
+   "Select EventCode,EventIdentifier,Type,LogFile,SourceName,Message,TimeGenerated from Win32_NTLogEvent where ( $logfile_wherebit ) and $severity_wherebit and $where_time_part",
    '','(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\n',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 check_for_data_errors($data_errors);
@@ -4913,18 +5148,18 @@ $collected_data[$last_wmi_data_index][0]{'_SeverityType'}=$severity_display;
 $collected_data[$last_wmi_data_index][0]{'_EventList'}='';
 
 if ($collected_data[$last_wmi_data_index][0]{'_ItemCount'}>0) {
-   $collected_data[$last_wmi_data_index][0]{'_EventList'}=" (List is on next line. Fields shown are - Logfile:TimeGenerated:SeverityLevel:EventId:Type:SourceName:Message)\n" . list_collected_values_from_all_rows(\@collected_data,['Logfile','TimeGenerated','EventIdentifier','Type','SourceName','Message'],"\n",':',0);;
+   $collected_data[$last_wmi_data_index][0]{'_EventList'}=" (List is on next line. Fields shown are - Logfile:TimeGenerated:SeverityLevel:EventId:EventCode:Type:SourceName:Message)\n" . list_collected_values_from_all_rows(\@collected_data,['Logfile','TimeGenerated','EventIdentifier','EventCode','Type','SourceName','Message'],"\n",':',0);;
 }
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 print $this_combined_data;
 
-exit $test_result;
+finish_program($test_result);
 }
 #-------------------------------------------------------------------------
 sub wmi_data_join {
-# this is a wrapper for get_multiple_wmi_samples and hence the parameters after the join related parameters are the same as that
+# this is a wrapper for get_wmi_data and hence the parameters after the join related parameters are the same as that
 # join WMI data
 # WMIC seems not to be able to do this although it looks like WQL is actually capable of it
 # anyway we do it here
@@ -4934,7 +5169,7 @@ sub wmi_data_join {
 
 # pass in
 # non-blank to use a join state file, O not to use it and just do the wmi query - additionally this value is use to help uniquely identify the join state file
-# the base array containing all the WMI data (comes directly from get_multiple_wmi_samples)
+# the base array containing all the WMI data (comes directly from get_wmi_data)
 # the WMI query number in the base array that we will be joining data to
 # the field in base array that we will be looking at for a match
 # regex to apply to the value in the base array field - allows matching when the fields are not identical - we extract $1$2$3$4$5 from the regex and use that
@@ -4942,7 +5177,7 @@ sub wmi_data_join {
 # the field in joining array that we will be looking at for a match
 # regex to apply to the value in the extra array field - allows matching when the fields are not identical - we extract $1$2$3$4$5 from the regex and use that
 # if this is specified the regex it is used to replace whatever is found by the regex - use for replacing # by _ etc. Set to undef if not to be used
-# -- the rest of the parameters are exactly the same as get_multiple_wmi_samples
+# -- the rest of the parameters are exactly the same as get_wmi_data
 
 # we take the base array and join the additional array to it using the fields defined to match the data rows
 # we do this for each data index in the array (remember its a 2 level array, first is wmi query number and second is wmi query row number)
@@ -4973,7 +5208,7 @@ if ($use_join_state_file) {
       # we consider the data expired if it is older than $opt_join_state_expiry seconds
       my $expiry_limit=$time_now-$opt_join_state_expiry;
 
-      eval { $results=retrieve($join_state_file); };
+      eval {   $results=retrieve($join_state_file);   };
       if ($@) {
          # we seem to have got an error with the retrieve
          # check the fileage of the file
@@ -4986,7 +5221,7 @@ if ($use_join_state_file) {
          } else {
             # some other error
             print "There was a problem retrieving the previous join state data ($join_state_file). If this error persists you may need to remove the join state data file. The error message was: $@";
-            exit $ERRORS{'UNKNOWN'};
+            finish_program($ERRORS{'UNKNOWN'});
          }
       }
       
@@ -5028,7 +5263,7 @@ if ($perform_wmi_query) {
    # make sure $results is empty since we might have loaded it to check expiry 
    @{$results}=();
    # the first thing we do is the WMI query - parameters just passed straight through
-   ($data_errors,$join_last_wmi_data_index)=get_multiple_wmi_samples($num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion);
+   ($data_errors,$join_last_wmi_data_index)=get_wmi_data($num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion);
    check_for_data_errors($data_errors);
    # if we are using a state file then save this query data for next time
    if ($use_join_state_file) {
@@ -5038,9 +5273,7 @@ if ($perform_wmi_query) {
       # also store the $join_last_wmi_data_index
       $$results[0][0]{'_$join_last_wmi_data_index'}=$join_last_wmi_data_index;
       $debug && print "Storing WMI results in the join state file\n";
-      eval {
-         store($results,$join_state_file);
-      };
+      eval {   store($results,$join_state_file);   };
       check_for_store_errors($@);
    }
 
@@ -5151,9 +5384,11 @@ my @new_data=();
 my @im_list=();
 my @is_list=();
 my @ii_list=();
+my @ic_list=();
 my @em_list=();
 my @es_list=();
 my @ei_list=();
+my @ec_list=();
 
 # build up a list of inclusions and exclusions from the specified sections
 my @section_lists=split(/,/,$sections);
@@ -5167,13 +5402,15 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
       push(@im_list,$wmi_ini->val($section,'im'));
       push(@is_list,$wmi_ini->val($section,'is'));
       push(@ii_list,$wmi_ini->val($section,'ii'));
+      push(@ic_list,$wmi_ini->val($section,'ic'));
       push(@em_list,$wmi_ini->val($section,'em'));
       push(@es_list,$wmi_ini->val($section,'es'));
       push(@ei_list,$wmi_ini->val($section,'ei'));
+      push(@ec_list,$wmi_ini->val($section,'ec'));
 
    }
 
-   $debug && print "In/Exclusion List=" . Dumper(\@im_list,\@is_list,\@ii_list,\@em_list,\@es_list,\@ei_list);
+   $debug && print "In/Exclusion List=" . Dumper(\@im_list,\@is_list,\@ii_list,\@ic_list,\@em_list,\@es_list,\@ei_list,\@ec_list);
    
    # step through each record found
    foreach my $row (@{$wmidata}) {
@@ -5182,7 +5419,7 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
       my $include_record=0;
       
       # see if there are any inclusions defined, if not the record is included
-      if ($#im_list>=0 || $#is_list>=0 || $#ii_list>=0) {
+      if ($#im_list>=0 || $#is_list>=0 || $#ii_list>=0 || $#ic_list>=0) {
          foreach my $is (@is_list) {
             if (defined($is)) {
                $debug && print "Inclusion Checking SourceName for $is\n";
@@ -5223,13 +5460,27 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
             }
          }
 
+         if (!$include_record) {
+            # now check for includes against EventCode
+            foreach my $ic (@ic_list) {
+               if (defined($ic)) {
+                  $debug && print "Inclusion Checking EventCode for $ic\n";
+                  if ($$row{'EventIdentifier'}=~/$ic/i) {
+                     $debug && print "Including\n";
+                     $include_record=1;
+                     last;
+                  }
+               }
+            }
+         }
+
       } else {
          # no include lists defined so automatically included
          $include_record=1;
       }
       
       # now check for exclusions, if any and only if this record is included
-      if ( $include_record &&    ($#em_list>=0 || $#es_list>=0 || $#ei_list>=0)   ) {
+      if ( $include_record &&    ($#em_list>=0 || $#es_list>=0 || $#ei_list>=0 || $#ec_list>=0)   ) {
          foreach my $es (@es_list) {
             if (defined($es)) {
                $debug && print "Exclusion Checking SourceName for $es\n";
@@ -5270,6 +5521,22 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
                }
             }
          }
+
+         # look for exclusions based on EventCode, but only if it is included already
+         if ($include_record) {
+            # now check for includes against EventCode
+            foreach my $ec (@ec_list) {
+               if (defined($ec)) {
+                  $debug && print "Exclusion Checking EventCode for $ec\n";
+                  if ($$row{'EventCode'}=~/$ec/i) {
+                     $debug && print "Excluding\n";
+                     $include_record=0;
+                     last;
+                  }
+               }
+            }
+         }
+
       } else {
          # nothing to do - no exclusions defined or record not included anyway
       }
@@ -5550,10 +5817,10 @@ sub list_collected_values_from_all_rows {
 # 3,30
 # 4,40
 # luckily we have an array like this hanging around - it is the array format returned by
-# get_multiple_wmi_samples
+# get_wmi_data
 my ($values_array,$field_list,$line_delimiter,$field_delimiter,$list_unique)=@_;
 # pass in
-# the array of values as returned by get_multiple_wmi_samples
+# the array of values as returned by get_wmi_data
 # an array of the hash keys you want to look up and list - these get separated by the FIELD DELIMITER
 # the LINE delimiter you want to use to list out after listing the defined fields (eg at the end of the line)
 # the FIELD delimiter you want to use between fields
@@ -5821,7 +6088,6 @@ return $max_so_far;
 #-------------------------------------------------------------------------
 sub convert_WMI_timestamp_to_seconds {
 # pass in a WMI Timestamp like 20100528105127.000000+600
-use DateTime;
 my ($wmi_timestamp)=@_;
 my $sec='';
 my $age_sec=''; 
@@ -5864,6 +6130,25 @@ foreach my $setting (sort $ini->Parameters($ini_section)) {
 }
 $output.="-------------------------------------------------------------------\n";
 return $output;
+}
+#-------------------------------------------------------------------------
+sub finish_program {
+# generic sub to handle program exit
+# pass in 
+# exit code
+my ($exit_code)=@_;
+
+$final_exit_code=$exit_code;
+
+$use_pro_library && finish_program_like_a_pro();
+
+if ($opt_use_cached_wmic_response || $use_cached_wmic_responses) {
+   print "WARNING - Using Cached WMIC Data. Your plugin results will be inaccurate.\n";
+}
+
+$test_mode eq '0' && print "EOT\n";
+$test_mode >=0 && print "exitcode1=$final_exit_code\n";
+exit $final_exit_code;
 }
 #-------------------------------------------------------------------------
 
