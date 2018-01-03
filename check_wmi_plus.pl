@@ -44,7 +44,7 @@ use lib "/usr/lib/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.57;
+our $VERSION=1.58;
 
 # which version of PRO (if used does this require)
 our $requires_PRO_VERSION=1.26;
@@ -72,7 +72,6 @@ our $opt_warn=(); # this becomes an array reference
 our $opt_critical=(); # this becomes an array reference
 our @opt_include_data=(); # this becomes an array reference
 our @opt_exclude_data=(); # this becomes an array reference
-our @opt_extra_wmic_args=(); # extra arguments to pass to wmic
 our $debug=0; # default value
 our $opt_value='';
 our $opt_z='';
@@ -218,6 +217,15 @@ our $force_wmic_command=0;
 # some checks will totally fail with this set
 # all your check response will be inaccurate
 our $use_cached_wmic_responses=0;
+
+# extra wmic args
+# specify standard additional arguments to pass directly to the wmic command line for ALL invocations of wmic
+# Note that the command line parameter --extrawmicarg is also available if you need this on a case by case basis
+# This is an array so you need to put each argument into a separate array index
+# eg @opt_extra_wmic_args=( "argument1=value1", "argument2=value2" );
+# should be set to @opt_extra_wmic_args=() if not used
+# extra wmic arguments specified on the command line are added to the ones specified here
+our @opt_extra_wmic_args=( ); # extra arguments to pass to wmic
 
 # force reading of the ini files - you may want to do this if you are doing a non-ini file check and you are using variables defined in an ini file
 # only use this if you really needed it since it makes each invocation of the plugin a lot slower
@@ -518,6 +526,12 @@ GetOptions(
    "itexthelp"                => \$opt_texthelp,
    "ishowusage!"              => \$opt_show_usage,
    "iusecachewmicresponse"    => \$opt_use_cached_wmic_response,
+   "itestwmicfilebase=s"      => \$test_wmic_file_base,
+   "itestnumber=s"            => \$test_number,
+   "itestgenerate"            => \$test_generate,
+   "itestrun"                 => \$test_run,
+   "itestignorejoinstatefiles"=> \$test_ignorejoinstatefiles,
+   "itestignorekeepstatefiles"=> \$test_ignorekeepstatefiles,
    "joinexpiry=s"             => \$opt_join_state_expiry,
    "keepexpiry=s"             => \$opt_keep_state_expiry,
    "keepid=s"                 => \$opt_keep_state_id,
@@ -534,12 +548,6 @@ GetOptions(
    "otheraguments=s"          => \$the_arguments{'_arg2'},
    "password=s"               => \$opt_password,
    "submode=s"                => \$opt_submode,
-   "testwmicfilebase=s"       => \$test_wmic_file_base,
-   "testnumber=s"             => \$test_number,
-   "testgenerate"             => \$test_generate,
-   "testrun"                  => \$test_run,
-   "testignorejoinstatefiles" => \$test_ignorejoinstatefiles,
-   "testignorekeepstatefiles" => \$test_ignorekeepstatefiles,
    "timeout=i"                => \$the_arguments{'_timeout'},
    "username=s"               => \$opt_username,
    "value=s"                  => \$opt_value,
@@ -648,9 +656,9 @@ if ($debug || $test_generate) {
 
    if ($test_generate) {
       my $test_commandline=$command_line;
-      # remove some specific --test parameters
-      $test_commandline=~s/--testg\w*//g;
-      $test_commandline=~s/--testn\w*[= ]*\d+//g;
+      # remove some specific --itest parameters
+      $test_commandline=~s/--itestg\w*//g;
+      $test_commandline=~s/--itestn\w*[= ]*\d+//g;
       print "\n# ---------------------------------------------------------------------------------------------\n[" . int(rand()*10000000) . "]\ndescription=\ncmd=$0 $test_commandline\n";
    } else {
 
@@ -1333,7 +1341,7 @@ LESS COMMONLY USED OPTIONS
 
  --namespace WMINAMESPACE  Specify the WMI Namespace. eg root/MicrosoftDfs. The default is root/cimv2. Use '/' (forward slash) instead of '\\\\' (backslash).
 
- --extrawmicarg EXTRAWMICARG  Specify additional arguments to be passed to the wmic command. The arguments are passed directly and must be complete and understood by wmic. In order to assist with escaping of quotes, all # are translated to ". To pass --option="client ntlmv2 auth"=Yes to wmic specifiy --extrawmicarg "--option=#client ntlmv2 auth#=Yes". This option can be specified multiple times to pass multiple arguments to wmic.
+ --extrawmicarg EXTRAWMICARG  Specify additional arguments to be passed to the wmic command. The arguments are passed directly and must be complete and understood by wmic. In order to assist with escaping of quotes, all # are translated to ". To pass --option="client ntlmv2 auth"=Yes to wmic specifiy --extrawmicarg "--option=#client ntlmv2 auth#=Yes". This option can be specified multiple times to pass multiple arguments to wmic. If you are using the conf file setting for extra wmic arguments then any options specified here are added to the ones specified in the conf file.
 
  --inihelp  Show the help from the INIFILE for the specified MODE/SUBMODE. If specified without MODE/SUBMODE, this shows a quick short summary of all valid MODE/SUBMODEs in the ini files.
  
@@ -1886,16 +1894,16 @@ if ($wmic_delimiter ne '|') {
 }
 
 # build up the extra wmic arguments if defined
-my $extra_wmic_arguments='';
 if ($#opt_extra_wmic_args>=0) {
    # Each array index should contain a complete argument for wmic eg --option=#client ntlmv2 auth#=Yes 
    # To save difficulty with quoting we translate # into "
    # So --option=#client ntlmv2 auth#=Yes becomes --option="client ntlmv2 auth"=Yes
-   $extra_wmic_arguments=join(' ',@opt_extra_wmic_args);
-   $extra_wmic_arguments=~s/#/"/g;
-   # not sure if this will work when using the wmiclient library
-   push(@wmi_args,$extra_wmic_arguments);
-   $debug && print "Extra Wmic Arguments specified:$extra_wmic_arguments\n";
+   foreach my $arg (@opt_extra_wmic_args) {
+      $arg=~s/#/"/g;
+      # not sure if this will work when using the wmiclient library
+      push(@wmi_args,$arg);
+      $debug && print "Extra Wmic Arguments specified:$arg\n";
+   }
 }
 
 my $wmi_query_quote="'";
@@ -4787,7 +4795,7 @@ if (lc($the_arguments{'_arg1'}) eq 'auto') {
 
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
-   "select displayname, Started, StartMode, State, Status FROM Win32_Service $where_bit",
+   "select name, displayname, Started, StartMode, State, Status FROM Win32_Service $where_bit",
    '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 check_for_data_errors($data_errors);

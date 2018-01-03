@@ -1,4 +1,4 @@
-check_wmi_plus v1.57
+check_wmi_plus v1.58
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -83,7 +83,7 @@ LESS COMMONLY USED OPTIONS
 
  --namespace WMINAMESPACE  Specify the WMI Namespace. eg root/MicrosoftDfs. The default is root/cimv2. Use '/' (forward slash) instead of '\\' (backslash).
 
- --extrawmicarg EXTRAWMICARG  Specify additional arguments to be passed to the wmic command. The arguments are passed directly and must be complete and understood by wmic. In order to assist with escaping of quotes, all # are translated to ". To pass --option="client ntlmv2 auth"=Yes to wmic specifiy --extrawmicarg "--option=#client ntlmv2 auth#=Yes". This option can be specified multiple times to pass multiple arguments to wmic.
+ --extrawmicarg EXTRAWMICARG  Specify additional arguments to be passed to the wmic command. The arguments are passed directly and must be complete and understood by wmic. In order to assist with escaping of quotes, all # are translated to ". To pass --option="client ntlmv2 auth"=Yes to wmic specifiy --extrawmicarg "--option=#client ntlmv2 auth#=Yes". This option can be specified multiple times to pass multiple arguments to wmic. If you are using the conf file setting for extra wmic arguments then any options specified here are added to the ones specified in the conf file.
 
  --inihelp  Show the help from the INIFILE for the specified MODE/SUBMODE. If specified without MODE/SUBMODE, this shows a quick short summary of all valid MODE/SUBMODEs in the ini files.
  
@@ -1176,10 +1176,10 @@ INI FILE HELP SUMMARY
 Plugin Elapsed with Usage Stats
    Plugin Elapsed
       Preparation
-         [Open INI Files: 0.281s]
-      Plugin Elapsed: 0.289s
+         [Open INI Files: 0.279s]
+      Plugin Elapsed: 0.286s
       Usage Logging
-         [Insert: 0.229s]
-      Usage Logging: 0.234s
-   Plugin Elapsed with Usage Stats: 0.523s
-CPU - User:0.504 (0.504+0) System:0.016 (0.016+0) MyTotal:0.52 ChildTotal:0 Total:0.52 Elapsed:0.289 WMIC_Calls:0 WMIC_Library_Calls:0
+         [Insert: 0.572s]
+      Usage Logging: 0.577s
+   Plugin Elapsed with Usage Stats: 0.864s
+CPU - User:0.504 (0.504+0) System:0.013 (0.013+0) MyTotal:0.517 ChildTotal:0 Total:0.517 Elapsed:0.286 WMIC_Calls:0 WMIC_Library_Calls:0

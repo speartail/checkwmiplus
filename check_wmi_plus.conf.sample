@@ -73,6 +73,15 @@ $force_wmic_command=0; # CHANGE THIS IF NEEDED
 # all your check response will be inaccurate
 $use_cached_wmic_responses=0;
 
+# extra wmic args
+# specify standard additional arguments to pass directly to the wmic command line for ALL invocations of wmic
+# Note that the command line parameter --extrawmicarg is also available if you need this on a case by case basis
+# This is an array so you need to put each argument into a separate array index
+# eg @opt_extra_wmic_args=( "argument1=value1", "argument2=value2" );
+# should be set to @opt_extra_wmic_args=() if not used
+# extra wmic arguments specified on the command line are added to the ones specified here
+our @opt_extra_wmic_args=(); # extra arguments to pass to wmic
+
 # ------------------------ PRO Library Options -------------------------
 # PRO Only:
 # collect various usage info and store it in $usage_db_file for later analysis
