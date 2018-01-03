@@ -1,4 +1,4 @@
-check_wmi_plus v1.47
+check_wmi_plus v1.48
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -11,7 +11,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--includedata DATASPEC] [--excludedata DATASPEC] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp]
  
  Help as a Manpage:  
  
@@ -58,6 +58,10 @@ LESS COMMONLY USED OPTIONS
  -b BYTEFACTOR  BYTEFACTOR is either 1000 or 1024 and is used for conversion units eg bytes to GB. Default is 1024.
 
  -t TIMEOUT  specify the number of seconds before the plugin will timeout. Some WMI queries take longer than others and network links with high latency may also require you to increase this from the default value of 15
+ 
+ --includedata DATASPEC  specify data values that are to be included. See the section below on INCLUDING AND EXCLUDING WMI DATA
+
+ --excludedata DATASPEC  specify data values that are to be excluded. See the section below on INCLUDING AND EXCLUDING WMI DATA
 
  --nodatamode  Controls how the plugin responds when no data is returned by the WMI query. Normally, the plugin returns an Unknown error. If you specify this option then you can use WARN/CRIT checking on the _ItemCount field. This is only useful for some checks eg checkfilesize where you might get no data back from the WMI query when the file is not found.
 
@@ -103,6 +107,86 @@ INI FILE SPECIFIED
 
 
 
+INCLUDING AND EXCLUDING WMI DATA
+The --includedata and --excludedata options modify the data returned from the WMI query to include/exclude only data that matches DATASPEC. DATASPEC is in the same format as warning/critical specifications (See Section WARNING AND CRITICAL SPECIFICATION).
+
+At the moment this is only enabled for checks from ini files and it does not apply to the built-in modes. All includes/excludes defined on the command line and the ini file are combined and then processed.
+
+Any fields that are returned by the WMI query can be used, not just the ones that are displayed. You might need to use the debug mode (-d) to see all the valid fields available.
+
+The include/exclude arguments can be specified multiple times on the command line. 
+
+If --includedata is not used, all data is included.
+If any of the inclusions are met the data is included. If any of the exclusions are met then the data is excluded. Inclusions are processed before Exclusions. 
+
+This can be useful to reduce the length of the output for certain checks or to focus on more important data eg on processes using more than 5% of the CPU rather than the potentially hundreds that are using less than 5%.
+
+Examples using -m checkproc -s cpu:
+
+--inc IDProcess=@2000:3000 to include all process IDs that are inside the range of 2000 to 3000.
+
+--exc _AvgCPU=@0:5 to exclude all processes where the average CPU utilisation is inside the range of 0 to 5.
+
+WARNING AND CRITICAL SPECIFICATION
+
+If warning or critical specifications are not provided then no checking is done and the check simply returns the value and any related performance data. If they are specified then they should be formatted as shown below.
+
+A range is defined as a start and end point (inclusive) on a numeric scale (possibly negative or positive infinity). The theory is that the plugin will do some sort of check which returns back a numerical value, or metric, which is then compared to the warning and critical thresholds. 
+
+Multiple warning or critical specifications can be specified. This allows for quite complex range checking and/or checking against multiple FIELDS (see below) at one time. The warning/critical is triggered if ANY of the warning/critical specifications are triggered.
+
+If a ini file check returns multiple rows eg checkio logical, criteria are applied to ALL rows and any ONE row meeting the criteria will cause a trigger. If the check has been defined properly it will show which row/instance triggered the criteria as well as the overall result.
+
+This is the generalised format for ranges:
+FIELD=[@]start:end
+
+The convention used for field names in this plugin is as follows:
+   - FIELDs that start with _ eg _Used% are calculated or derived values
+   - FIELDs that are all lower case are command line arguments eg _arg1
+   - Other FIELDs eg PacketsSentPersec are what is returned from the WMI Query
+
+ NOTES
+   1. FIELD describes which value the specification is compared against. It is optional (the default is dependent on the MODE).
+   2. start <= end
+   3. start and ":" is not required if start=0
+   4. if range is of format "start:" and end is not specified, assume end is infinity
+   5. to specify negative infinity, use "~"
+   6. alert is raised if metric is outside start and end range (inclusive of endpoints)
+   7. if range starts with "@", then alert if inside this range (inclusive of endpoints)
+   8. The start and end values can use multipliers from the following list: 
+      e, p, k, g, m, t or the time-based multipliers wk, yr, hr, sec, mth, min, day.
+      The time-based multipliers are normally used where the data is in seconds.
+      eg 1G for 1 x 10^9 or 2.5k for 2500
+      eg 1wk for 1 week, 3.5day for 3.5 days etc
+
+ EXAMPLE RANGES
+ This table lists example WARN/CRIT criteria and when they will trigger an alert.
+ 10                      < 0 or > 10, (outside the range of {0 .. 10})
+ 10:                     < 10, (outside {10 .. infinity})
+ ~:10                    > 10, (outside the range of {-infinity .. 10})
+ 10:20                   < 10 or > 20, (outside the range of {10 .. 20})
+ @10:20                  = 10 and = 20, (inside the range of {10 .. 20})
+ 10                      < 0 or > 10, (outside the range of {0 .. 10})
+ 10G                     < 0 or > 10G, (outside the range of {0 .. 10G})
+
+ EXAMPLES WITH FIELDS
+ for MODE=checkdrivesize:
+ _UsedGB=10G             Check if the _UsedGB field is < 0 or > 10G, (outside the range of {0 .. 10G}) 
+ 10                      Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}), since _Used% is the default
+ _Used%=10               Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}) 
+
+ EXAMPLES WITH MULITPLE SPECIFICATIONS
+ for MODE=checkdrivesize:
+ -w _UsedGB=10G -w 15 -w _Free%=5: -c _UsedGB=20G -c _Used%=25  
+ This will generate a warning if 
+    - the Used GB on the drive is more than 10G or 
+    - the used % of the drive is more than 15% or
+    - the free % of the drive is less than 5%
+ 
+ This will generate a critical if 
+    - the Used GB on the drive is more than 20G or 
+    - the used % of the drive is more than 25%
+
 BUILTIN MODES
  The following modes are coded directly into the plugin itself and do not require any ini files to function.
  
@@ -128,13 +212,14 @@ checkcpuq
    optimal value for you.
    
 checkdrivesize  
-   ARG1  drive letter or volume name of the disk to check. If omitted or set to . all drives will be included.
+   Also see checkvolsize
+   ARG1  drive letter or volume name of the disk to check. If omitted a list of valid drives will be shown. If set to . all drives will be included.
       To include multiple drives separate them with a |. This uses a regular expression so take care to
       specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data"
    ARG2  Set this to 1 to use volumes names (if they are defined) in plugin output and performance data ie -o 1
    ARG3  Set this to 1 to include information about the sum of all disk space on the entire system.
       If you set this you can also check warn/crit against the overall disk space.
-      To show only the overall disk, set ARG3 to 1 and set ARG2 to 1 (actually to any non-existant disk)
+      To show only the overall disk, set ARG3 to 1 and set ARG1 to 1 (actually to any non-existant disk)
    WARN/CRIT  can be used as described below.
       Valid Warning/Critical Fields are: _Used% (Default), _UsedGB, _Free%, _FreeGB.
 
@@ -270,71 +355,23 @@ checkuptime
       
       Typically you would specify something like -w 20min: -c 10min: (to if less than 20 min and critical if less than 10 min)
 
+checkvolsize  
+   Also see checkdrivesize
+   ARG1  drive letter or volume name or volume label of the volume to check. If omitted a list of valid drives will be shown. If set to . all drives will be included.
+      To include multiple volumes separate them with a |. This uses a regular expression so take care to
+      specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data"
+   ARG2  Set this to 1 to use labels (if they are defined) in plugin output and performance data ie -o 1
+   ARG3  Set this to 1 to include information about the sum of all volume space on the entire system.
+      If you set this you can also check warn/crit against the overall volume space.
+      To show only the overall volume, set ARG3 to 1 and set ARG1 to 1 (actually to any non-existant volume)
+   WARN/CRIT  can be used as described below.
+      Valid Warning/Critical Fields are: _Used% (Default), _UsedGB, _Free%, _FreeGB.
+
 checkwsusserver  
    If there are any WSUS related errors in the event log in the last 24 hours a CRITICAL state is returned.
    This mode has been removed. You can perform the same check that this used to perform by using MODE=checkeventlog 
    using the wsusevents ini section. The command line parameters are:
    -m checkeventlog -o 2 -3 24 -4 wsusevents -c 0
-
-WARNING AND CRITICAL SPECIFICATION
-
-If warning or critical specifications are not provided then no checking is done and the check simply returns the value and any related performance data. If they are specified then they should be formatted as shown below.
-
-A range is defined as a start and end point (inclusive) on a numeric scale (possibly negative or positive infinity). The theory is that the plugin will do some sort of check which returns back a numerical value, or metric, which is then compared to the warning and critical thresholds. 
-
-Multiple warning or critical specifications can be specified. This allows for quite complex range checking and/or checking against multiple FIELDS (see below) at one time. The warning/critical is triggered if ANY of the warning/critical specifications are triggered.
-
-If a ini file check returns multiple rows eg checkio logical, criteria are applied to ALL rows and any ONE row meeting the criteria will cause a trigger. If the check has been defined properly it will show which row/instance triggered the criteria as well as the overall result.
-
-This is the generalised format for ranges:
-FIELD=[@]start:end
-
-The convention used for field names in this plugin is as follows:
-   - FIELDs that start with _ eg _Used% are calculated or derived values
-   - FIELDs that are all lower case are command line arguments eg _arg1
-   - Other FIELDs eg PacketsSentPersec are what is returned from the WMI Query
-
- NOTES
-   1. FIELD describes which value the specification is compared against. It is optional (the default is dependent on the MODE).
-   2. start <= end
-   3. start and ":" is not required if start=0
-   4. if range is of format "start:" and end is not specified, assume end is infinity
-   5. to specify negative infinity, use "~"
-   6. alert is raised if metric is outside start and end range (inclusive of endpoints)
-   7. if range starts with "@", then alert if inside this range (inclusive of endpoints)
-   8. The start and end values can use multipliers from the following list: 
-      e, p, k, g, m, t or the time-based multipliers wk, yr, hr, sec, mth, min, day.
-      The time-based multipliers are normally used where the data is in seconds.
-      eg 1G for 1 x 10^9 or 2.5k for 2500
-      eg 1wk for 1 week, 3.5day for 3.5 days etc
-
- EXAMPLE RANGES
- This table lists example WARN/CRIT criteria and when they will trigger an alert.
- 10                      < 0 or > 10, (outside the range of {0 .. 10})
- 10:                     < 10, (outside {10 .. 8})
- ~:10                    > 10, (outside the range of {-infinity .. 10})
- 10:20                   < 10 or > 20, (outside the range of {10 .. 20})
- @10:20                  = 10 and = 20, (inside the range of {10 .. 20})
- 10                      < 0 or > 10, (outside the range of {0 .. 10})
- 10G                     < 0 or > 10G, (outside the range of {0 .. 10G})
-
- EXAMPLES WITH FIELDS
- for MODE=checkdrivesize:
- _UsedGB=10G             Check if the _UsedGB field is < 0 or > 10G, (outside the range of {0 .. 10G}) 
- 10                      Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}), since _Used% is the default
- _Used%=10               Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}) 
-
- EXAMPLES WITH MULITPLE SPECIFICATIONS
- for MODE=checkdrivesize:
- -w _UsedGB=10G -w 15 -w _Free%=5: -c _UsedGB=20G -c _Used%=25  
- This will generate a warning if 
-    - the Used GB on the drive is more than 10G or 
-    - the used % of the drive is more than 15% or
-    - the free % of the drive is less than 5%
- 
- This will generate a critical if 
-    - the Used GB on the drive is more than 20G or 
-    - the used % of the drive is more than 25%
 
 INI FILE HELP SUMMARY
  The ini file and/or dir provides the following Modes and/or Submodes 
@@ -915,4 +952,16 @@ INI FILE HELP SUMMARY
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _AvgCPU (Default), _NoCPU, NoSuchField
+
+ test, 3 (-m test -s 3)  
+   Just for testing
+
+   DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate. Default is 5.
+
+   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _AvgCPU (Default), _ItemCount
+
+ test, 4 (-m test -s 4)  
+   Just for testing
+
+   WARN/CRIT  Not used for this MODE.
 

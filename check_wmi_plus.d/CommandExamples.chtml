@@ -1,6 +1,6 @@
 # This is not a std html or any other kind of file
 # It is used to define some command examples
-# Run check wmi plus with --iexamples to see the output
+# Run check wmi plus with --iexamples=1 to see the output
 # The output is HTML format suitable for use with Drupal
 # You must provide -H, -u and -p on the command line
 # The base command then becomes
@@ -19,7 +19,7 @@
 !Define:perf:green
 !Define:trigger:red
 #
-The checks shown on this page are generated using the --iexample parameter.
+The checks shown on this page are generated using the --iexample=1 parameter.
 A valid -H HOSTNAME -u USER and -p PASSWORD must also be passed on the command line.
 The examples are run against a machine (which is not very busy) running Windows Server 2008 R2, IIS v7, SQL Express 2008 and Exchange 2010.
 
