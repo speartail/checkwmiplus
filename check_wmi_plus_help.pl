@@ -24,7 +24,7 @@ if ($opt_help) {
       # we have the script to make the manpage and have not been asked to show text only help
       exec ("$make_manpage_script \"$0 --itexthelp\" \"$manpage_dir\"") or print STDERR "couldn't exec $make_manpage_script: $!";
    } else {
-      print "Warning: Can not access/execute Manpage script ($make_manpage_script).\nShowing help in text-only format.\n\n";
+     # print "Warning: Can not access/execute Manpage script ($make_manpage_script).\nShowing help in text-only format.\n\n";
    }
 }
 
