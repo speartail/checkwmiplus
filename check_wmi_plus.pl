@@ -43,10 +43,10 @@ use lib "/usr/lib64/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.61;
+our $VERSION=1.62;
 
 # which version of PRO (if used does this require)
-our $requires_PRO_VERSION=1.27;
+our $requires_PRO_VERSION=1.28;
 
 use strict;
 use Getopt::Long;
@@ -79,6 +79,7 @@ our $opt_inihelp='';
 our $opt_package='';
 our $opt_keep_state=1;
 our $opt_keep_state_id='';
+our $opt_helper_state_expiry='3600'; # default number of seconds after which helper state results are considered expired
 our $opt_keep_state_expiry='3600'; # default number of seconds after which keep state results are considered expired
 our $opt_join_state_expiry='3600'; # default number of seconds after which join state results are considered expired
 our $opt_texthelp=0;
@@ -98,7 +99,10 @@ our $test_number=1;
 our $test_generate='';
 our $test_run='';
 our $test_ignorejoinstatefiles='';
+our $test_ignorehelperstatefiles='';
 our $test_ignorekeepstatefiles='';
+our $opt_filter_ini_rows_by_status='';
+our $opt_disable_pro='';
 
 
 # they all start with _ since later they are copied into the data array/hash and this reduces the chance they clash
@@ -497,7 +501,7 @@ our %performance_data_fields = (
    checksmart        => [ 'Reallocated_Sector_Count||{_DiskDisplayName}_Reallocated_Sector_Count','Power_On_Hours||{_DiskDisplayName}_Power_On_Hours','Power_Cycle_Count||{_DiskDisplayName}_Power_Cycle_Count','Temperature||{_DiskDisplayName}_Temperature','Current_Pending_Sector||{_DiskDisplayName}_Current_Pending_Sector','Offline_Uncorrectable||{_DiskDisplayName}_Offline_Uncorrectable' ],
    checkstartupcommand=>[ '_ItemCount||Startup Command Count' ],
    checktime         => [ '_DiffSec' ],
-   checkuptime       => [ '_UptimeMin|min|Uptime Minutes' ],
+   checkuptime       => [ '_UptimeMin|min|Uptime Minutes', '_UptimeHours|hours|Uptime Hours', '_UptimeDays|days|Uptime Days' ],
    checkuseraccount  => [ '_ItemCount||User Account Count' ],
    checkvolsize      => [ '_UsedSpace|B|{VolumeDisplayName} Space', '_Used%|%|{VolumeDisplayName} Utilisation' ],
 
@@ -571,68 +575,73 @@ if ($host_os =~ m/win32$/i) {
 
 Getopt::Long::Configure('no_ignore_case');
 GetOptions(
-   "Authenticationfile=s"     => \$opt_auth_file,
-   "arguments=s"              => \$the_arguments{'_arg1'},
-   "bytefactor=s"             => \$the_arguments{'_bytefactor'},
-   "critical=s@"              => \$opt_critical,
-   "debug+"                   => \$debug,
-   "excludedata=s@"           => \@opt_exclude_data,
-   "extrawmicargs=s@"         => \@opt_extra_wmic_args,
-   "fieldshow"                => \$opt_show_fields,
-   "forceiniopen"             => \$force_ini_open,
-   "forcewmiccommand"         => \$force_wmic_command,
-   "forcetruncateoutput=s"    => \$the_arguments{'_truncate_output'},
-   "help"                     => \$opt_help,
-   "Hostname=s"               => \$the_arguments{'_host'},
-   "icollectusage!"           => \$opt_collect_usage,
-   "iexamples=s"              => \$opt_command_examples,
+   "Authenticationfile=s"           => \$opt_auth_file,
+   "arguments=s"                    => \$the_arguments{'_arg1'},
+   "bytefactor=s"                   => \$the_arguments{'_bytefactor'},
+   "Convertslash"                   => \$the_arguments{'_convertslash'},
+   "critical=s@"                    => \$opt_critical,
+   "debug+"                         => \$debug,
+   "excludedata=s@"                 => \@opt_exclude_data,
+   "extrawmicargs=s@"               => \@opt_extra_wmic_args,
+   "fieldshow"                      => \$opt_show_fields,
+   "filterinirowsbystatus=s"        => \$opt_filter_ini_rows_by_status,
+   "forceiniopen"                   => \$force_ini_open,
+   "forcewmiccommand"               => \$force_wmic_command,
+   "forcetruncateoutput=s"          => \$the_arguments{'_truncate_output'},
+   "help"                           => \$opt_help,
+   "helperexpiry=s"                 => \$opt_helper_state_expiry,
+   "Hostname=s"                     => \$the_arguments{'_host'},
+   "icollectusage!"                 => \$opt_collect_usage,
+   "iexamples=s"                    => \$opt_command_examples,
    "IgnoreMyOutDatedPerlModuleVersions"
-                              => \$opt_ignore_versions,
-   "IgnoreAuthFileWarnings"   => \$opt_ignore_auth_file_warnings,
-   "includedata=s@"           => \@opt_include_data,
-   "inidir=s"                 => \$wmi_ini_dir,
-   "inifile=s"                => \$wmi_ini_file,
-   "inihelp"                  => \$opt_inihelp,
-   "installmoduledir"         => \$opt_installmodule_dir,
-   "ipackage"                 => \$opt_package,
-   "itexthelp"                => \$opt_texthelp,
-   "ishowusage!"              => \$opt_show_usage,
-   "iusecachewmicresponse"    => \$opt_use_cached_wmic_response,
-   "itestwmicfilebase=s"      => \$test_wmic_file_base,
-   "itestnumber=s"            => \$test_number,
-   "itestgenerate"            => \$test_generate,
-   "itestrun"                 => \$test_run,
-   "itestignorejoinstatefiles"=> \$test_ignorejoinstatefiles,
-   "itestignorekeepstatefiles"=> \$test_ignorekeepstatefiles,
-   "joinexpiry=s"             => \$opt_join_state_expiry,
-   "keepexpiry=s"             => \$opt_keep_state_expiry,
-   "keepid=s"                 => \$opt_keep_state_id,
-   "keepstate!"               => \$opt_keep_state,
-   "logkeep"                  => \$opt_log_usage_keep,
-   "logshow"                  => \$opt_log_usage_show,
-   "logsuffix=s"              => \$opt_log_usage_suffix,
-   "logswitch"                => \$opt_log_usage_switch,
-   "Mapexitstatus=s@"         => \@opt_map_exit_status,
-   "mode=s"                   => \$opt_mode,
-   "namespace=s"              => \$opt_wminamespace,
-   "nodataexit=s"             => \$the_arguments{'_nodataexit'},
-   "nodatamode"               => \$the_arguments{'_nodatamode'},
-   "nodatastring=s"           => \$the_arguments{'_nodatastring'},
-   "otheraguments=s"          => \$the_arguments{'_arg2'},
-   "password=s"               => \$opt_password,
-   "submode=s"                => \$opt_submode,
-   "timeout=i"                => \$the_arguments{'_timeout'},
-   "username=s"               => \$opt_username,
-   "value=s"                  => \$opt_value,
-   "variablesdisabled"        => \$opt_disable_static_variables,
-   "version"                  => \$opt_Version,
-   "warning=s@"               => \$opt_warn,
-   "ydelay=s"                 => \$the_arguments{'_delay'},
-   "z"                        => \$opt_z,
-   "3arg=s"                   => \$the_arguments{'_arg3'},
-   "4arg=s"                   => \$the_arguments{'_arg4'},
-   "5arg=s"                   => \$the_arguments{'_arg5'},
-   );
+                                    => \$opt_ignore_versions,
+   "IgnoreAuthFileWarnings"         => \$opt_ignore_auth_file_warnings,
+   "includedata=s@"                 => \@opt_include_data,
+   "idisablepro"                    => \$opt_disable_pro,
+   "inidir=s"                       => \$wmi_ini_dir,
+   "inifile=s"                      => \$wmi_ini_file,
+   "inihelp"                        => \$opt_inihelp,
+   "installmoduledir"               => \$opt_installmodule_dir,
+   "ipackage"                       => \$opt_package,
+   "itexthelp"                      => \$opt_texthelp,
+   "ishowusage!"                    => \$opt_show_usage,
+   "iusecachewmicresponse"          => \$opt_use_cached_wmic_response,
+   "itestwmicfilebase=s"            => \$test_wmic_file_base,
+   "itestnumber=s"                  => \$test_number,
+   "itestgenerate"                  => \$test_generate,
+   "itestrun"                       => \$test_run,
+   "itestignorehelperstatefiles"    => \$test_ignorehelperstatefiles,
+   "itestignorejoinstatefiles"      => \$test_ignorejoinstatefiles,
+   "itestignorekeepstatefiles"      => \$test_ignorekeepstatefiles,
+   "joinexpiry=s"                   => \$opt_join_state_expiry,
+   "keepexpiry=s"                   => \$opt_keep_state_expiry,
+   "keepid=s"                       => \$opt_keep_state_id,
+   "keepstate!"                     => \$opt_keep_state,
+   "logkeep"                        => \$opt_log_usage_keep,
+   "logshow"                        => \$opt_log_usage_show,
+   "logsuffix=s"                    => \$opt_log_usage_suffix,
+   "logswitch"                      => \$opt_log_usage_switch,
+   "Mapexitstatus=s@"               => \@opt_map_exit_status,
+   "mode=s"                         => \$opt_mode,
+   "namespace=s"                    => \$opt_wminamespace,
+   "nodataexit=s"                   => \$the_arguments{'_nodataexit'},
+   "nodatamode"                     => \$the_arguments{'_nodatamode'},
+   "nodatastring=s"                 => \$the_arguments{'_nodatastring'},
+   "otheraguments=s"                => \$the_arguments{'_arg2'},
+   "password=s"                     => \$opt_password,
+   "submode=s"                      => \$opt_submode,
+   "timeout=i"                      => \$the_arguments{'_timeout'},
+   "username=s"                     => \$opt_username,
+   "value=s"                        => \$opt_value,
+   "variablesdisabled"              => \$opt_disable_static_variables,
+   "version"                        => \$opt_Version,
+   "warning=s@"                     => \$opt_warn,
+   "ydelay=s"                       => \$the_arguments{'_delay'},
+   "z"                              => \$opt_z,
+   "3arg=s"                         => \$the_arguments{'_arg3'},
+   "4arg=s"                         => \$the_arguments{'_arg4'},
+   "5arg=s"                         => \$the_arguments{'_arg5'},
+   );                               
 
 if ($test_run) {
    # if both options supplied, ignore generate
@@ -647,8 +656,12 @@ our $use_pro_library=0;
 
 if (-f "$base_dir/check_wmi_plus_pro.pl") {
    if (do "$base_dir/check_wmi_plus_pro.pl") {
-      $debug && print "Pro Library is present\n";
-      init_pro_module();
+      if ($opt_disable_pro) {
+         $debug && print "Pro Library is present - but disabled by command line option\n";
+      } else {
+         $debug && print "Pro Library is present\n";
+         init_pro_module();
+      }
    } else {
       print "Pro Library exists but does not compile: $@\n";
       exit 1;
@@ -749,6 +762,11 @@ if ($debug || $test_generate) {
          '','',my $dummy2,\$the_arguments{'_delay'},undef,0);
          $wmic_delimiter='|';
          $wmic_split_delimiter='\|';
+         print "-------------------------- Time ---------------------\n";
+         my $gmt = DateTime->now(time_zone => 'gmt');
+         my $local = DateTime->now(time_zone=>'local');
+         print `date`;
+         print "GMT=$gmt, LOCAL=$local\n";
          print "======================================= END SYSTEM INFO ===================================================\n";
       }
    }
@@ -1701,6 +1719,11 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
       }
    }
 
+#   ########### FOR TESTING ONLY to make it look like there are multiple CPUs from the test machine
+   if ($output=~/DeviceID.Name.NumberOfCores/) {
+      $output=$output . "CPU1|Intel(R) Core(TM) i5-6500 CPU @ 3.20GHz|2\n";
+   }
+
    $all_output.=$output;
    $debug && print "OUTPUT: $output\n";
    $test_generate && print "wmicoutput_${test_number}_${global_wmic_call_counter}=<<EOT\n${output}\nEOT\n";
@@ -1854,6 +1877,12 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                            # If you got the regex wrong or some fields come back with | in them you will get 
                            # "Use of uninitialized value within @column_names in hash element" error when using $column_names[$header_field_number]
                            # hence use $column_names[$header_field_number]||''
+
+                           if ($the_arguments{'_convertslash'}) {
+                              # convert \ to /
+                              $field=~s/\\/\//g;
+                           }
+
                            $$results[$i][$found]{$column_names[$header_field_number]||''}=$field;
                            # only increment the header field number when we use it 
                            $header_field_number++;
@@ -2930,15 +2959,15 @@ foreach my $item (@{$list}) {
 }
 }
 #-------------------------------------------------------------------------
-sub process_queryextention_fields_list {
+sub process_queryextension_fields_list {
 # enhance the query with queryextensions
 # pass in 
 # the query
-# array reference to the query extenstions from the ini file
+# array reference to the query extensions from the ini file
 my ($query,$queryextension)=@_;
 
 my $new_query=$query;
-$debug && print "Query Extenstions: " . Dumper($queryextension);
+$debug && print "Query Extensions: " . Dumper($queryextension);
 foreach my $qe (@{$queryextension}) {
    if (defined($qe)) {
       $debug && print "Processing QueryExtension: $qe\n";
@@ -3355,7 +3384,7 @@ if ($query) {
    my @join_query_list=$wmi_ini->val($ini_section,'joinquery',undef);
 
    # see if there are any query extensions
-   my @query_extenstion_list=$wmi_ini->val($ini_section,'queryextension',undef);
+   my @query_extension_list=$wmi_ini->val($ini_section,'queryextension',undef);
 
    # now, optionally we need some fields to check warn/crit against
    # these are in the testfield parameter(s)
@@ -3439,7 +3468,7 @@ if ($query) {
       }
 
       # prepare the query extension if any
-      $query=process_queryextention_fields_list($query,\@query_extenstion_list);
+      $query=process_queryextension_fields_list($query,\@query_extension_list);
 
       $use_pro_library && endtimer('Preparation');
 
@@ -3451,6 +3480,8 @@ if ($query) {
 
       # add any join data
       process_join_queries(\@join_config_list,\@join_query_list,\@collected_data,$last_wmi_data_index);
+
+      $use_pro_library && process_helper_query($wmi_ini,$ini_section,\@collected_data,$last_wmi_data_index);
 
       my $process_each_row=$wmi_ini->val($ini_section,'processallrows','');
       my $num_rows_in_last_wmi_result=$#{$collected_data[$last_wmi_data_index]};
@@ -3497,8 +3528,19 @@ if ($query) {
          $debug && print "================== Processing WMI Data Row $row =================\n";
          $collected_data[$last_wmi_data_index][$row]{_TestResult}=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][$row],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
          my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][$row],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-         $debug && print "THIS ROW'S DISPLAY=$this_display_info\n";
-         $overall_display_info.=$this_display_info;
+
+         my $show_this_one=1;
+         if ($use_pro_library) {
+            $show_this_one=advanced_pro_filters($collected_data[$last_wmi_data_index][$row]);
+         }
+         
+         # we may exclude some from the display
+         if ($show_this_one) {
+            $debug && print "THIS ROW'S DISPLAY=$this_display_info\n";
+            $overall_display_info.=$this_display_info;
+         }
+         
+         # but we always include them in performance data
          $overall_performance_data.=$this_performance_data;
       }
 
@@ -4576,17 +4618,21 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
          
          if ($process_this_row) {
             $debug && print "Including the following service: " . Dumper($row) . "\n";
+            my $status_display_info='';
+            if (lc($$row{'Status'}) ne 'ok') {
+               $status_display_info=" ($$row{'Status'})";
+            }
             if ($$row{'Started'} eq 'True' && $$row{'State'} eq 'Running' && $$row{'Status'} eq 'OK') {
                $num_ok++;
                if (!$auto_mode) {
                   # if we have using the regex mode then list out the services we find
-                  $result_text{'ok'}.=    "'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
-                  $result_text{'all'}.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
+                  $result_text{'ok'}.=    "'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}$status_display_info, ";
+                  $result_text{'all'}.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}$status_display_info, ";
                }
             } else {
                $num_bad++;
-               $result_text{'bad'}.=   "'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
-               $result_text{'all'}.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
+               $result_text{'bad'}.=   "'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}$status_display_info, ";
+               $result_text{'all'}.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}$status_display_info, ";
             }
          }
       }
@@ -4596,6 +4642,8 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
 $result_text{'all'}=~s/, $/./;
 $result_text{'ok'}=~s/, $/./;
 $result_text{'bad'}=~s/, $/./;
+
+$debug && print "Showing ResultText: " . Dumper(\%result_text);
 
 # load some values to check warn/crit against
 $collected_data[$last_wmi_data_index][0]{'_NumGood'}=$num_ok;
@@ -4794,6 +4842,8 @@ check_for_data_errors($data_errors);
 
 calc_new_field('_UptimeSec','PERF_ELAPSED_TIME','SystemUpTime,%.2f',\@collected_data,$last_wmi_data_index,0);
 $collected_data[$last_wmi_data_index][0]{'_UptimeMin'}=int($collected_data[$last_wmi_data_index][0]{'_UptimeSec'}/60);
+$collected_data[$last_wmi_data_index][0]{'_UptimeHours'}=$collected_data[$last_wmi_data_index][0]{'_UptimeMin'}/60;
+$collected_data[$last_wmi_data_index][0]{'_UptimeDays'}=$collected_data[$last_wmi_data_index][0]{'_UptimeHours'}/24;
 $collected_data[$last_wmi_data_index][0]{'_DisplayTime'}=display_uptime($collected_data[$last_wmi_data_index][0]{'_UptimeSec'});
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
@@ -5119,7 +5169,7 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
 
          # by default, in the performance data we use the Name to identify the drive
          # if the user has specified $other_opt_arguments=1 then we use the Label (if it has one)
-         my $drive_identifier=$$row{'Name'};
+         my $drive_identifier=$$row{'Name'} || 'NO_NAME';
          if ($the_arguments{'_arg2'} && exists($$row{'Label'})) {
             # a blank label looks like (null) - so assume that is also a label that is not set
             if ($$row{'Label'} && $$row{'Label'}!~/\(null\)/) {
@@ -5368,101 +5418,15 @@ sub wmi_data_join {
 my ($use_join_state_file,$base_array,$last_wmi_data_index,$base_field,$base_regex,$base_replacement,$extra_field,$extra_regex,$extra_replacement,$num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion)=@_;
 
 $debug && print "Performing Join on MWI data using $base_field ($base_regex) to match to $extra_field ($extra_regex) in data from $wmi_query\n";
-
-my $perform_wmi_query='the join state file does not exist';
-my $join_state_file='';
-my $time_now=time();
 my $data_errors;
 my $join_last_wmi_data_index;
-if ($use_join_state_file) {
-   # $opt_keep_state_id is just in case the user needs a more unique file name
-   my $join_state_file_name="cwpjs_${opt_mode}_${the_arguments{'_host'}}_${the_arguments{'_arg1'}}_${the_arguments{'_arg2'}}_${the_arguments{'_arg3'}}.${opt_keep_state_id}.$use_join_state_file";
-   $join_state_file_name=~s/\W*//g;
-   $join_state_file_name="$join_state_file_name.state";
-   $join_state_file="$tmp_dir/$join_state_file_name";
-   $debug && print "Starting Join State Mode\nSTATE FILE: $join_state_file\n";
 
-   if ($test_ignorejoinstatefiles) {
-      # ignore reading of or testing for any join state files
-   } elsif ( ! -s $join_state_file) {
-      $perform_wmi_query="the previous join state data file ($join_state_file) contained no data";
-   } elsif ( -f $join_state_file) {
-      # the join state file exists so we read it and return that as if we had done a WMI query
-      # first open the file and make sure it is valid
-
-      # we consider the data expired if it is older than $opt_join_state_expiry seconds
-      my $expiry_limit=$time_now-$opt_join_state_expiry;
-
-      eval {   $results=retrieve($join_state_file);   };
-      if ($@) {
-         # we seem to have got an error with the retrieve
-         # check the fileage of the file
-         # if it is older than $expiry_limit, delete the file and exit - next run will create it again
-         my $file_mod_time=(stat($join_state_file))[9] || 0;
-         if ($file_mod_time<$expiry_limit) {
-            # this file has expired anyway, delete it
-            my $fileage=$time_now-$file_mod_time;
-            $perform_wmi_query="there was a problem retrieving the previous join state data ($join_state_file). The file has expired anyway ($fileage seconds old)";
-         } else {
-            # some other error
-            $plugin_output.="There was a problem retrieving the previous join state data ($join_state_file). If this error persists you may need to remove the join state data file. The error message was: $@";
-            finish_program($ERRORS{'UNKNOWN'});
-         }
-      }
-      
-      # now check expiry
-      $debug && print "Checking previous data's expiry - Timestamp $$results[0][0]{'_JoinStateCreateTimestamp'} vs Expiry After $expiry_limit (Keep State Expiry setting is ${opt_join_state_expiry}sec)\n";
-      if (defined($$results[0][0]{'_JoinStateCreateTimestamp'})) {
-         if ($$results[0][0]{'_JoinStateCreateTimestamp'}<$expiry_limit) {
-            # data has expired
-            # need to get it again
-            $debug && print "Data has expired - getting data again\n";
-            # by default we will now get the data again for the first time
-            $perform_wmi_query='the previously stored join state data has expired';
-         } else {
-            # we think we don't need to perform a WMI query since its in the file
-            $perform_wmi_query='';
-            
-            $debug && print "Using Existing WMI DATA of:" . Dumper($results);
-            
-            # fudge delay parameter so that it the time between runs, instead of what was set on the command line
-            $the_arguments{'_delay'}=$time_now-$$results[0][0]{'_JoinStateCreateTimestamp'};
-            # set the sample period into the results so that we can display it
-            $$results[0][0]{'_JoinStateSamplePeriod'}=$the_arguments{'_delay'};
-            # reset the $last_wmi_data_index variable
-            $join_last_wmi_data_index=$$results[0][0]{'_$join_last_wmi_data_index'};
-
-         }
-      } else {
-         # join state timestamp was not found - data invalid
-         # we will, by default now get the data again for the first time
-         $debug && print "Data does not contain create timestamp - getting data again\n";
-         $perform_wmi_query='previously stored join state data is invalid';
-      }
-   }
-
+if ($use_pro_library) {
+   ($data_errors,$join_last_wmi_data_index)=cacheable_get_wmi_data($use_join_state_file,$opt_join_state_expiry,$test_ignorejoinstatefiles,$num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,\$specified_delay,$provide_sums,$slash_conversion);
+} else {
+   ($data_errors,$join_last_wmi_data_index)=get_wmi_data($num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,\$specified_delay,$provide_sums,$slash_conversion);
 }
 
-# see if we need to do the wmi query or if we are just using the results from last time
-if ($perform_wmi_query) {
-   # make sure $results is empty since we might have loaded it to check expiry 
-   @{$results}=();
-   # the first thing we do is the WMI query - parameters just passed straight through
-   ($data_errors,$join_last_wmi_data_index)=get_wmi_data($num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion);
-   check_for_data_errors($data_errors);
-   # if we are using a state file then save this query data for next time
-   if ($use_join_state_file) {
-      # done one WMI query and need to store it in the file for next time
-      # add a create timestamp to the data
-      $$results[0][0]{'_JoinStateCreateTimestamp'}=$time_now;
-      # also store the $join_last_wmi_data_index
-      $$results[0][0]{'_$join_last_wmi_data_index'}=$join_last_wmi_data_index;
-      $debug && print "Storing WMI results in the join state file\n";
-      eval {   store($results,$join_state_file);   };
-      check_for_store_errors($@);
-   }
-
-}
 
 # now do the join
 # the data lives in $results
@@ -6366,8 +6330,10 @@ my $age_sec='';
 my $current_dt='';
 my $current_sec='';
 $debug && print "Converting WMI Timestamp $wmi_timestamp to seconds = ";
+my $tz='';
 if ($wmi_timestamp=~/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).(\d*)([+\-])+(\d*)$/) {
    # now convert that fileage to seconds
+   $tz=$8 . sprintf("%02d%02d",$9/60,$9%60);
    my $dt = DateTime->new(
       year       => $1,
       month      => $2,
@@ -6376,17 +6342,17 @@ if ($wmi_timestamp=~/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).(\d*)([+\-])+(\
       minute     => $5,
       second     => $6,
       nanosecond => $7,
-      # we initially think that we don't care about the timezone
-      # its possible that this might be wrong if the systems are in different timezones?
-      # if we need to we have the WMI returned timezone as $8 . sprintf("%04d",$9) (it has to be padded with leading zeros)
-      time_zone  => 'floating' 
+      # use the timezone of the queried system - convert the WMI timezone (number of minutes) to HHMM for use with DateTime
+      time_zone  => $tz,
      );
+   
    $sec=$dt->epoch();
-   $current_dt=DateTime->now( time_zone => 'local' )->set_time_zone('floating');
+   # force the current time into the same timezone as the queried system
+   $current_dt=DateTime->now( time_zone => $dt->time_zone() );
    $current_sec=$current_dt->epoch();
    $age_sec=$current_sec-$sec;
 }
-$debug && print "$sec. Now=$current_dt ($current_sec sec). Age=$age_sec sec\n";
+$debug && print "$sec. Now=$current_dt ($current_sec sec). Age=$age_sec sec. TZ converted from $8$9 (sec) to $tz (HHMM)\n";
 return $sec,$age_sec;
 }
 #-------------------------------------------------------------------------

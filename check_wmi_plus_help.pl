@@ -9,7 +9,7 @@
 sub short_usage {
 my ($no_exit)=@_;
 print <<EOT;
-Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--fieldshow]
+Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash]
 EOT
 if (!$no_exit) {
    print "Help as a Manpage: --help\nHelp as Text: --itexthelp\n";
@@ -76,7 +76,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash]
  
  Help as a Manpage:  
  
@@ -160,11 +160,13 @@ LESS COMMONLY USED OPTIONS
  
  --nokeepstate  disables the default mode of keeping state between plugin runs.
  
- --keepexpiry KEXPIRY  KEXPIRY is the number of seconds after which the plugin assumes that the previously collected data has expired. The default is $opt_keep_state_expiry sec. You should run your plugin more frequently than this value or set KEXPIRY higher.
+ --keepexpiry EXPIRY  EXPIRY is the number of seconds after which the plugin assumes that the previously collected data has expired. The default is $opt_keep_state_expiry sec. You should run your plugin more frequently than this value or set EXPIRY higher.
  
  --keepid KID  KID is a unique identifier. This is normally not needed. In order to keep state between plugin runs, the data is written to a file. In order to stop collisions between different plugin runs, and hence incorrect calculations,  the filename is unique based on the checkmode, hostname, arguments passed etc. If for some reason these are not sufficient and you are experiencing collisions, you can add a unique KID to each plugin check to ensure uniqueness.
  
- --joinexpiry JEXPIRY  JEXPIRY is the number of seconds after which the plugin assumes that the previously collected join data has expired. The default is $opt_join_state_expiry sec. Join data that is defined as being reasonably static by whomever created the check will only get refreshed every JEXPIRY seconds.
+ --joinexpiry EXPIRY  EXPIRY is the number of seconds after which the plugin assumes that the previously collected join data has expired. The default is $opt_join_state_expiry sec. Join data that is defined as being reasonably static by whomever created the check will only get refreshed every EXPIRY seconds.
+ 
+ --helperexpiry EXPIRY  EXPIRY is the number of seconds after which the plugin assumes that the previously collected helper query data has expired. The default is $opt_helper_state_expiry sec. Helper query data that is defined as being reasonably static by whomever created the check will only get refreshed every EXPIRY seconds.
  
  -z  Provide full specification warning and critical values for performance data. Not all performance data processing software can handle this eg PNP4Nagios. If this is used with -d then usernames and passwords will be shown rather than being masked (useful if you want to cut and paste the exact wmic command for testing).
  
@@ -193,6 +195,8 @@ LESS COMMONLY USED OPTIONS
  --Mapexit MAPSPEC  Pro Version only. Change the exit code plugin would normally use based on MAPSPEC. MAPSPEC format is one of X:Y or X:Y:REGEX, where X is the original exit code and Y is the new exit code. If REGEX is specified then the exit code mapping is only done if the plugin output matches the case insensitive regular expression REGEX. Multiple --Mapexit parameters can be specified. Order is important as the first one that matches will be used.
  
  --fieldshow  Show the list of fields available/used for a specific check. Run the check normally and add this option. The list of fields will be shown above the plugin output. This is useful when configuring checks. It shows all the fields available for the specific check. For example, use it to show which fields you can use for --includedata etc 
+
+ --filterinirowsbystatus FILTERSTATUS  Filter ini-based checks by their status. This is useful for checks that return many rows and where you may only want to show results that are not ok (for example). This only applies to the per row results and not to the overall state. FILTERSTATUS is a regular expression of Nagios return codes that you wish to display. Nagios return codes are 0-3, where 0=OK, 1=WARNING, 2=CRITICAL, 3=UNKNOWN. In order to display return codes 1 or 2 only a regular expression like 1|2 would be used. To display only OK states (return code 0) a regular expression of 0 would suffice.
 
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc. Keeping State is used by default.
@@ -677,7 +681,7 @@ checkwsusserver
    If there are any WSUS related errors in the event log in the last 24 hours a CRITICAL state is returned.
    This mode has been removed. You can perform the same check that this used to perform by using MODE=checkeventlog 
    using the wsusevents ini section. The command line parameters are:
-   -m checkeventlog -o 2 -3 24 -4 wsusevents -c 0
+   -m checkeventlog -a application -o 2 -3 24 -4 wsusevents -c 0
 
 EOT
 
