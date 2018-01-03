@@ -4,6 +4,7 @@
 #
 # Copyright (C) 2011 Matthew Jurgens
 # You can email me using: mjurgens (the at goes here) edcint.co.nz
+# Download link can be found at http://www.edcint.co.nz
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -24,7 +25,7 @@
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.4";
+my $VERSION="1.41";
 
 use strict;
 use Getopt::Long;
@@ -37,6 +38,7 @@ use Data::Dumper;
 my $opt_Version='';
 my $opt_help='';
 my $opt_mode='';
+my $opt_submode='';
 my $opt_username='';
 my $opt_password='';
 my $opt_warn=(); # this becomes an array reference
@@ -44,17 +46,23 @@ my $opt_critical=(); # this becomes an array reference
 my $debug=0; # default value
 my $opt_value='';
 my $opt_z='';
+my $opt_inihelp='';
 
+# they all start with _ since later they are copied into the data array/hash and this reduces the chance they clash
+# then we have consistent usage throughout
+my %the_original_arguments=(); # used to store the original user specified command line arguments  - sometimes we change the arguments
 my %the_arguments = (
-   arg1  => '',
-   arg2  => '',
-   arg3  => '',
-   arg4  => '',
-   arg5  => '',
-   bytefactor  => '',
-   delay       => '',
-   host        => '',
-   timeout     => '',
+   _arg1  => '',
+   _arg2  => '',
+   _arg3  => '',
+   _arg4  => '',
+   _arg5  => '',
+   _bytefactor  => '',
+   _delay       => '',
+   _host        => '',
+   _nodata      => '',
+   _nodataexit  => '',
+   _timeout     => '',
 );
 
 my ($wmi_commandline, $output);
@@ -69,39 +77,43 @@ my @critical_spec_result_list;    # list of critical spec results
 #=================================== CONFIG ===================================
 #==============================================================================
 
-$PROGNAME="check_wmi";
+$PROGNAME="check_wmi_plus";
 
 my $default_bytefactor=1024;
 my $effective_delay='';
 
+# I have everything installed in /opt/nagios/bin/plugins
+# You may want to change this to suit you
+
 my $wmic_command='/opt/nagios/bin/plugins/wmic'; # CHANGE THIS IF NEEDED
 
 # set the location of the ini file. Set to '' if not using it or specify using the -i parameter
-my $wmi_ini_file=''; # CHANGE THIS IF NEEDED,
+my $wmi_ini_file='/opt/nagios/bin/plugins/check_wmi_plus.ini'; # CHANGE THIS IF NEEDED,
 
 
 ########################################################################
 ########################################################################
-# When %valid_test_fields is fully developed it can replace %mode_list
+# When %valid_test_fields is fully developed it can replace %mode_list?
 ########################################################################
 ########################################################################
 
 # list all valid modes with dedicated subroutines here
 # all the modes that can take a critical/warning specification set to value of 1
 my %mode_list = ( 
-   checkcpu => 1,
-   checkcpuq => 1,
-   checknetwork => 1,
-   checkmem => 1,
-   checkuptime => 1,
+   checkcpu       => 1,
+   checkcpuq      => 1,
    checkdrivesize => 1,
    checkeventlog  => 1,
    checkfileage   => 1,
    checkfilesize  => 1,
+   checkfoldersize=> 1,
+   checkgeneric   => 1,
+   checkmem       => 1,
+   checknetwork   => 1,
    checkprocess   => 1,
    checkservice   => 1,
+   checkuptime    => 1,
    checkwsusserver=> 0,
-   checkfoldersize=> 1,
 );
 
 # multipliers are calculated as BYTEFACTOR^mulitpler eg m = x * 1000^2 or x * 1024^2
@@ -140,6 +152,7 @@ my %valid_test_fields = (
    checkfileage      => [ qw(_FileAge) ],
    checkfilesize     => [ qw(FileSize _ItemCount) ],
    checkfoldersize   => [ qw(_FolderSize _ItemCount) ],
+   checkgeneric      => [ qw(FileControlBytesPersec FileControlOperationsPersec FileDataOperationsPersec FileReadBytesPersec FileReadOperationsPersec FileWriteBytesPersec FileWriteOperationsPersec) ],
    checkmem          => [ qw(_MemUsed% _MemFree% _MemUsed _MemFree _MemTotal) ],
    checknetwork      => [ qw(CurrentBandwidth PacketsSentPersec PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors BytesSentPersec BytesReceivedPersec PacketsSentPersec) ],
    checkprocess      => [ qw(_ItemCount) ],
@@ -160,7 +173,7 @@ my %display_fields = (
    # the default DELIM is comma space, if DELIM is set to ~ then none will be used
    # the default SEP is =, if SEP is set to ~ then none will be used
    # DISPLAY normally shows FIELD or whatever you specify as DISPLAY. Set DISPLAY to ~ to show nothing.
-   # if units is set to scaledbytes then we use a function to convert it to a nice byte based figure
+   # if units is prefixed with # then we use a function to convert it to a scaled based figure using prefixes like K, M, G etc - the calculation is influenced by the BYTEFACTOR setting
    # In DISPLAY/START/END anything enclosed in {} will be substituted by the value of that item of that name eg {DeviceID} will replace by the value contained in DeviceID eg C:
    # eg BytesSentPersec will be shown as BytesSentPersec=XX, 
    # eg BytesSentPersec|BYTES will be shown as BytesSentPersec=XXBytes, 
@@ -171,11 +184,12 @@ my %display_fields = (
    checkdrivesize    => [ '_DisplayMsg||~|~| - ||', 'DiskDisplayName||~|~| ||', '_DriveSizeGB|GB|Total||||', '_UsedGB|GB|Used|| ||', '_Used%|%|~|~||(|)', '_FreeGB|GB|Free|| ||', '_Free%|%|~|~||(|)' ],
    checkeventlog     => [ '_DisplayMsg||~|~| - ||', '_ItemCount| event(s)|~|~| ||', '_SeverityType||~|~||of Severity Level "|"', '_arg3| hours|~|~|~|were recorded in the last |', '_arg1||~|~|~| from the | Event Log (excluding the TermServDevices and Microsoft-Windows-PrintSpooler sources).', "_EventList||~|~|~||" ],
    checkfileage      => [ '_DisplayMsg||~|~| - ||', '_arg1||Age of File| |~|| is ', '_NicelyFormattedFileAge||~|~|~|| or ', '_DisplayFileAge||~|~|~||', '_PerfDataUnit||~|~|||(s).' ], 
-   checkfilesize     => [ '_DisplayMsg||~|~| - ||', '_arg1||File| |~|| is ', 'FileSize|scaledbytes|~|~|. ||', '_ItemCount| instance(s)|Found| |.||' ], 
-   checkfoldersize   => [ '_DisplayMsg||~|~| - ||', '_arg1||Folder| |~|| is ', '_FolderSize|scaledbytes|~|~|. ||', '_ItemCount| files(s)|Found| |.||', '_FileList||~|~|~||' ], 
-   checkmem          => [ '_DisplayMsg||~|~| - ||', 'MemType||~|~|~||: ', '_MemTotal|scaledbytes|Total|: | - ||', '_MemUsed|scaledbytes|Used|: | ||', '_MemUsed%|%|~|~| - |(|)', '_MemFree|scaledbytes|Free|: | ||', '_MemFree%|%|~|~||(|)' ], 
-   checknetwork      => [ '_DisplayMsg||~|~| - ||', 'Name||Interface: |~| ||', 'CurrentBandwidth|scaledbytes|Speed:|~| |(|)', 'BytesSentPersec|scaledbytes|Byte Send Rate||/sec, ||', 'BytesReceivedPersec|scaledbytes|Byte Receive Rate||/sec, ||', 'PacketsSentPersec||Packet Send Rate||/sec, ||', 'PacketsReceivedPersec||Packet Receive Rate||/sec, ||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
-   checkprocess      => [ '_DisplayMsg||~|~| - ||', '_ItemCount| Instance(s)|Found |~|~|| of "{SearchString}" running.', 'ProcessList||~|~|~||' ],
+   checkfilesize     => [ '_DisplayMsg||~|~| - ||', '_arg1||File| |~|| is ', 'FileSize|#B|~|~|. ||', '_ItemCount| instance(s)|Found| |.||' ], 
+   checkfoldersize   => [ '_DisplayMsg||~|~| - ||', '_arg1||Folder| |~|| is ', '_FolderSize|#B|~|~|. ||', '_ItemCount| files(s)|Found| |.||', '_FileList||~|~|~||' ], 
+   checkgeneric      => [ '_DisplayMsg||~|~| - ||', 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ], 
+   checkmem          => [ '_DisplayMsg||~|~| - ||', 'MemType||~|~|~||: ', '_MemTotal|#B|Total|: | - ||', '_MemUsed|#B|Used|: | ||', '_MemUsed%|%|~|~| - |(|)', '_MemFree|#B|Free|: | ||', '_MemFree%|%|~|~||(|)' ], 
+   checknetwork      => [ '_DisplayMsg||~|~| - ||', 'Name||Interface: |~| ||', 'CurrentBandwidth|#bit/s|Speed:|~| |(|)', 'BytesSentPersec|#B/sec|Byte Send Rate||||', 'BytesReceivedPersec|#B/sec|Byte Receive Rate||||', 'PacketsSentPersec||Packet Send Rate||||', 'PacketsReceivedPersec||Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
+   checkprocess      => [ '_DisplayMsg||~|~| - ||', '_ItemCount| Instance(s)|Found |~|~|| of "{_arg1}" running.', 'ProcessList||~|~|~||' ],
    checkservice      => [ '_DisplayMsg||~|~| - ||', '_Total| Services(s)|Found |~|||', '_NumGood| OK|~|~| and ||', '_NumBad| with problems. |~|~|~||', '_ServiceList||~|~|~||' ],
    checkuptime       => [ '_DisplayMsg||~|~| - ||', '_DisplayTime||System Uptime is |~|.||' ],
 
@@ -197,6 +211,7 @@ my %performance_data_fields = (
    checkfileage      => [ '_DisplayFileAge|{_PerfDataUnit}|{_arg1} Age' ],
    checkfilesize     => [ 'FileSize|bytes|{_arg1} Size', '_ItemCount||File Count' ],
    checkfoldersize   => [ '_FolderSize|bytes|{_arg1} Size', '_ItemCount||File Count' ],
+   checkgeneric      => [ 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ],
    checkmem          => [ '_MemUsed|Bytes|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ], 
    checknetwork      => [ 'BytesSentPersec', 'BytesReceivedPersec', 'PacketsSentPersec', 'PacketsReceivedPersec', 'OutputQueueLength', 'PacketsReceivedErrors' ],
    checkprocess      => [ '_ItemCount||Process Count' ],
@@ -216,22 +231,26 @@ GetOptions(
    "Version"            => \$opt_Version,
    "help"               => \$opt_help,
    "mode=s"             => \$opt_mode,
-   "Hostname=s"         => \$the_arguments{'host'},
+   "submode=s"          => \$opt_submode,
+   "Hostname=s"         => \$the_arguments{'_host'},
    "username=s"         => \$opt_username,
    "password=s"         => \$opt_password,
-   "arguments=s"        => \$the_arguments{'arg1'},
-   "otheraguments=s"    => \$the_arguments{'arg2'},
-   "3arg=s"             => \$the_arguments{'arg3'},
-   "4arg=s"             => \$the_arguments{'arg4'},
+   "arguments=s"        => \$the_arguments{'_arg1'},
+   "otheraguments=s"    => \$the_arguments{'_arg2'},
+   "3arg=s"             => \$the_arguments{'_arg3'},
+   "4arg=s"             => \$the_arguments{'_arg4'},
    "warning=s@"         => \$opt_warn,
    "critical=s@"        => \$opt_critical,
-   "timeout=i"          => \$the_arguments{'timeout'},
-   "bytefactor=s"       => \$the_arguments{'bytefactor'},
+   "timeout=i"          => \$the_arguments{'_timeout'},
+   "bytefactor=s"       => \$the_arguments{'_bytefactor'},
    "debug"              => \$debug,
+   "nodata"             => \$the_arguments{'_nodata'},
+   "xnodataexit=s"      => \$the_arguments{'_nodataexit'},
    "value=s"            => \$opt_value,
-   "ydelay=s"           => \$the_arguments{'delay'},
+   "ydelay=s"           => \$the_arguments{'_delay'},
    "z"                  => \$opt_z,
    "inifile=s"          => \$wmi_ini_file,
+   "inihelp"            => \$opt_inihelp,
    );
 
 # check up on the ini file
@@ -243,8 +262,8 @@ if ($wmi_ini_file && ! -f $wmi_ini_file) {
    use Config::IniFiles;
 }
 
-if ($the_arguments{'timeout'}) {
-   $TIMEOUT=$the_arguments{'timeout'};
+if ($the_arguments{'_timeout'}) {
+   $TIMEOUT=$the_arguments{'_timeout'};
 }
 # Setup the trap for a timeout
 $SIG{'ALRM'} = sub {
@@ -253,17 +272,18 @@ $SIG{'ALRM'} = sub {
 };
 alarm($TIMEOUT);
  
-if ($the_arguments{'bytefactor'}) {
-   if ($the_arguments{'bytefactor'} ne '1024' && $the_arguments{'bytefactor'} ne '1000') {
-      print "The BYTEFACTOR option must be 1024 or 1000. '$the_arguments{'bytefactor'}' is not valid.\n";
+if ($the_arguments{'_bytefactor'}) {
+   if ($the_arguments{'_bytefactor'} ne '1024' && $the_arguments{'_bytefactor'} ne '1000') {
+      print "The BYTEFACTOR option must be 1024 or 1000. '$the_arguments{'_bytefactor'}' is not valid.\n";
       short_usage();
    }
 }
-my $actual_bytefactor=$the_arguments{'bytefactor'} || $default_bytefactor;
+my $actual_bytefactor=$the_arguments{'_bytefactor'} || $default_bytefactor;
 
 if ($opt_help) {
    usage();
 }
+
 if ($opt_Version) {
    print "Version: $VERSION\n";
    exit $ERRORS{'OK'};
@@ -277,10 +297,13 @@ if ($opt_warn && $opt_critical && $opt_value) {
    exit $test_result;
 }
 
-if (! $the_arguments{'host'}) {
+if (! $the_arguments{'_host'}) {
    print "No Hostname specified\n\n";
    short_usage();
 }
+
+# take a copy of the original arguments
+%the_original_arguments=%the_arguments;
 
 #==============================================================================
 #===================================== MAIN ===================================
@@ -297,26 +320,62 @@ if (defined($mode_list{$opt_mode})) {
    my $subref=\&$opt_mode;
    &$subref('');
 } else {
-   my $mode_ok=0;
    if ($wmi_ini_file) {
+      my $ini_section='';
+      my $wmi_ini;
       # maybe the mode is defined in the ini file
       # read the ini file and check
-      my $wmi_ini = new Config::IniFiles( -file => "$wmi_ini_file", -allowcontinue => 1 );
-      # load the ini file groups into an array - a group is a mode
-      my @ini_modes=$wmi_ini->Groups();
-       # see if we have found the mode
-      my @found_modes=grep(/^$opt_mode$/,@ini_modes);
-      if ($#found_modes==0) {
-         print "Found $opt_mode\n";
-         $mode_ok=1;
+      $wmi_ini = new Config::IniFiles( -file => "$wmi_ini_file", -allowcontinue => 1 );
+
+      # there are 2 ways a section in the ini file is matched
+      # 1) [MODE] - $opt_mode matches the whole section name
+      # 2) [MODE SUBMODE] = $opt_mode is a Config::IniFiles Group and $opt_submode is a MemberName
+      # first see if there is a section named $opt_mode 
+
+      if ($wmi_ini->SectionExists($opt_mode)) {
+         $debug && print "Found Section $opt_mode\n";
+         $ini_section=$opt_mode;
+      } else {
+         # now check for a group and a member
+         # load the ini file groups into an array - a group is a mode
+         my @ini_modes=$wmi_ini->Groups();
+          # see if we have found the mode
+         $debug && print "INI FILE MODES " . Dumper(\@ini_modes);
+         my @found_modes=grep(/^$opt_mode$/,@ini_modes);
+         if ($#found_modes==0) {
+            $debug && print "Found Group $opt_mode\n";
+            # now use $opt_submode to match a membername
+            my @group_members=$wmi_ini->GroupMembers($opt_mode);
+            $debug && print "GROUP MEMBERS " . Dumper(\@group_members);
+            my @found_members=grep(/^$opt_mode +$opt_submode$/,@group_members); # could be any number of spaces between group and member
+            if ($#found_members==0) {
+               $debug && print "Found Member $opt_submode\n";
+               $ini_section=$found_members[0];
+            }
+            
+         }
+      }
+      
+      if ($ini_section) {
+         checkini($wmi_ini,$ini_section);
+      } elsif ($opt_inihelp) {
+         # here we need to list out the modes available in the ini file
+         my @ini_modes=$wmi_ini->Sections();
+         print "The ini file provides the following Modes and/or Submodes - \n";
+         print join("\n",@ini_modes) . "\n";
+         print "Add a valid Mode and/or Submode to this command line to get detailed help for that Mode.\n";
+         exit;
+      } else {
+         print "A valid MODE and/or SUBMODE must be specified\n";
+         short_usage();
       }
 
+
+
    }
 
-   if (!$mode_ok) {
-      print "A valid MODE must be specified\n";
-      short_usage();
-   }
+   print "A valid MODE and/or SUBMODE must be specified\n";
+   short_usage();
 }
 
 # if we get to here we default to an OK exit
@@ -330,7 +389,7 @@ exit $ERRORS{'OK'};
 sub short_usage {
 my ($no_exit)=@_;
 print <<EOT;
-Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-t TIMEOUT] [-y DELAY] [-i INI] [-d] [-z]
+Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-t TIMEOUT] [-y DELAY] [-x NODATAEXIT] [-n] [-d] [-z] [--inifile INI]  [--inihelp] 
 EOT
 if (!$no_exit) {
    print "Specify the --help parameter to view the complete help information\n";
@@ -357,10 +416,27 @@ my %field_lists;
 foreach my $mode (keys %valid_test_fields) {
    $field_lists{$mode}=join(', ',@{$valid_test_fields{$mode}});
    $field_lists{$mode}=~s/, $/./; # remove the last comma space
-   $field_lists{$mode}=~s/([\w%]+)(,)*/Valid Warning\/Critical Fields are: $1 (Default)$2/; # stick (default) after the first one in the list
+   # I can't work out one nice regex to do this next bit, so its 2
+   # One for when there is only 1 field defined and
+   # One for when there is more than 1 field defined
+   # The array @{$valid_test_fields{$mode}} contains the list
+   if ($#{$valid_test_fields{$mode}}>0) {
+      # use the multi field regex
+      $field_lists{$mode}=~s/([\w%]+)(,)*/Valid Warning\/Critical Fields are: $1 (Default)$2/; # stick (default) after the first one in the list
+   } else {
+      # single field only
+      $field_lists{$mode}="The only valid Warning\/Critical Field is $field_lists{$mode}, so you don't even need to specify it!";
+   }
+    
+  
 }
 
 short_usage(1);
+my $ini_info='';
+if ($wmi_ini_file) {
+   $ini_info="\nUse --inihelp on its own to list the valid modes contained within the ini file.\n"
+}
+
 print <<EOT;
 
 where 
@@ -370,12 +446,25 @@ INI is the full path of an ini file to use
 -d Enable debug. Use this to see a lot more of what is going on included the exact WMI Query and results.
 -z Provide full specification warning and critical values for performance data. 
    Not all performance data processing software can handle this eg PNP4Nagios
+-n Controls how the plugin responds when no data is returned by the WMI query. Normally, the plugin returns an Unknown error.
+   If you specify this option then you can use WARN/CRIT checking on the _ItemCount field. This is only useful for some
+   check eg checkfilesize where you might get no data back from the WMI query.
+NODATAEXIT is the plugin result if the WMI Query returns no data. Ignored if -n is set.
+      Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown.
+      Only used for some checks. All checks from the ini file can use this.
 
+
+$ini_info
 MODE=checkcpu
 -------------
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 10.
-   If specifying longer values you may also need to use the -t parameter to set a longer script timeout.
-   WARN/CRIT can be used as described below. $field_lists{'checkcpu'}.
+   Some CPU checks just take whatever WMI or SNMP gives them from the precalculated values. We don't. We calculate
+   our own utilisation value over a given timeperiod. This is much more accurate.
+
+   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
+      you may also need to use the -t parameter to set a longer script timeout.
+   WARN/CRIT can be used as described below.
+   $field_lists{'checkcpu'}.
 
 MODE=checkcpuq
 -------------
@@ -384,7 +473,8 @@ MODE=checkcpuq
    ARG1: (optional) specifies how many point checks are performed. Default 3.
    DELAY: (optional) specifies the number of seconds between point checks. Default 1. It can be 0 but in reality there will always 
       be some delay between checks as it takes time to perform the actual WMI query 
-   WARN/CRIT can be used as described below. $field_lists{'checkcpuq'}.
+   WARN/CRIT can be used as described below.
+      $field_lists{'checkcpuq'}.
    
    Note: Microsoft says "A sustained processor queue of greater than two threads generally indicates
    processor congestion.". However, we recommended testing your warning/critical levels to determine the
@@ -399,7 +489,8 @@ MODE=checkdrivesize
    ARG3: Set this to 1 to include information about the sum of all disk space on the entire system.
       If you set this you can also check warn/crit against the overall disk space.
       To show only the overall disk, set ARG3 to 1 and set ARG2 to 1 (actually to any non-existant disk)
-   WARN/CRIT can be used as described below. $field_lists{'checkdrivesize'}.
+   WARN/CRIT can be used as described below.
+      $field_lists{'checkdrivesize'}.
 
 MODE=checkeventlog
 ------------------
@@ -409,7 +500,8 @@ MODE=checkeventlog
       for example to report all errors that got logged in the past 24 hours in the System event log use: 
       -a System -o 1 -3 24
       It ignores errors from Terminal Server printers, as they occur at every RDP connection from an admin.
-   WARN/CRIT can be used as described below. $field_lists{'checkeventlog'}.
+   WARN/CRIT can be used as described below.
+      $field_lists{'checkeventlog'}.
 
 MODE=checkfileage
 ----------------
@@ -417,7 +509,8 @@ MODE=checkfileage
    ARG2: set this to one of the time multipliers ($time_multiplier_list)
       This becomes the display unit and the unit used in the performance data. Default is hr.
       -z can not be used for this mode.
-   WARN/CRIT can be used as described below. $field_lists{'checkfileage'}
+   WARN/CRIT can be used as described below.
+      $field_lists{'checkfileage'}
       The warning/critical values should be specified in seconds. However you can use the time multipliers
       ($time_multiplier_list) to make it easier to use 
       eg instead of putting -w 3600 you can use -w 1hr
@@ -428,29 +521,29 @@ MODE=checkfilesize
 ------------------
    ARG1: full path to the file. Use '/' (forward slash) instead of '\\' (backslash).
       eg "C:/pagefile.sys" or "C:/windows/winhlp32.exe"
-   ARG2: Set this to 1 if you want to use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
+   NODATAEXIT can be set for this check.
+   WARN/CRIT can be used as described below.
+   If you specify -n then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
       This allows you to control how the plugin responds to non-existant files.
-   ARG3: Set this to determine the plugin result if the file is not found. Ignored if ARG2 set to 1.
-      Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown.
-   WARN/CRIT can be used as described below. $field_lists{'checkfilesize'}.
+      $field_lists{'checkfilesize'}.
 
 MODE=checkfoldersize
 --------------------
    WARNING - This check can be slow and may timeout, especially if including subdirectories. 
       It can overload the Windows machine you are checking. Use with caution.
    ARG1: full path to the folder. Use '/' (forward slash) instead of '\\' (backslash). eg "C:/Windows"
-   ARG2: Set this to 1 if you want to use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
-      This allows you to control how the plugin responds to non-existant files.
-   ARG3: Set this to determine the plugin result if the file is not found. Ignored if ARG2 set to 1.
-      Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown.
    ARG4: Set this to s to include files from subdirectories eg -x s
-   WARN/CRIT can be used as described below. $field_lists{'checkfoldersize'}.
+   NODATAEXIT can be set for this check.
+   WARN/CRIT can be used as described below.
+   If you specify -n then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
+      This allows you to control how the plugin responds to non-existant files.
+      $field_lists{'checkfoldersize'}.
 
 MODE=checkmem
 -------------
-   ARG1: "physical" for physical memory "page" for pagefile
+   SUBMODE: "physical" for physical memory "page" for pagefile
    WARN/CRIT can be used as described below.
-   $field_lists{'checkmem'}.
+      $field_lists{'checkmem'}.
 
 MODE=checknetwork
 -------------
@@ -460,25 +553,33 @@ MODE=checknetwork
       ipconfig/all command on Windows. However, its not exactly the same. Run without -a to list the adapter
       names according to WMI. Typically you need to use '' around the adapter name when specifying.
       eg -a 'Intel[R] PRO_1000 T Server Adapter _2 - Packet Scheduler Miniport'
-   WARN/CRIT can be used as described below. $field_lists{'checknetwork'}
+   WARN/CRIT can be used as described below.
+      $field_lists{'checknetwork'}
    BYTEFACTOR defaults to 1000 for this mode. You can override this if you wish.
    
 MODE=checkprocess
 -----------------
-   ARG1: A comma delimited list of process names to look for. Use % for wildcard. Use % alone to count all processes.
-   ARG2: Set this to = so force the use of = instead of LIKE in the WMI query. When this is used you can not use %.
-      There have been some reports of a random error when using LIKE in the WMI query. Setting this may fix the problem.
-   WARN/CRIT can be used as described below. $field_lists{'checkprocess'}
+   SUBMODE: Set this to Name or Commandline to determine if ARG1 matches against just the process name (Default) or 
+      the commplete Command line used to run the process.
+   ARG1: A regular expression to match against the process name or complete command line. Use . alone to count all processes.
+         Typically the process command line is made up of DRIVE:PATH\\PROCESSNAME PARAMETERS
+         Use '/' (forward slash) instead of '\\' (backslash). eg "C:/Windows" or "C:/windows/system32"
+         Note: Any '/' in your regular expression will get converted to '\\\\'.
+   ARG2: Set this to 'Name' (Default) or 'Commandline' to display the process names or the whole command line.
+   WARN/CRIT can be used as described below.
+      $field_lists{'checkprocess'}
    
 MODE=checkservice
 -----------------
    ARG1: the short or long service name that can be seen in the properties of the service in Windows
       Regular expressions can be used. Use Auto to check that all automatically started services are OK.
-   WARN/CRIT can be used as described below. $field_lists{'checkservice'}
+   WARN/CRIT can be used as described below.
+      $field_lists{'checkservice'}
 
 MODE=checkuptime
 ----------------
-   WARN/CRIT can be used as described below. $field_lists{'checkuptime'}
+   WARN/CRIT can be used as described below.
+      $field_lists{'checkuptime'}
       The warning/critical values should be specified in seconds. However you can use the time multipliers
       ($time_multiplier_list) to make it easier to use 
       eg instead of putting -w 1800 you can use -w 30min
@@ -579,12 +680,12 @@ sub scaled_bytes {
 # pass a number
 # from http://www.perlmonks.org/?node_id=378538
 # very cool
-# modified a little to protect against uninitialised variables
+# modified a little to protect against uninitialised variables and to remove the byte unit 
 my ($incoming)=@_;
 if ($incoming ne '') {
    (sort { length $a <=> length $b }
    map { sprintf '%.3g%s', $incoming/$actual_bytefactor**$_->[1], $_->[0] }
-   [" bytes"=>0],[KB=>1],[MB=>2],[GB=>3],[TB=>4],[PB=>5],[EB=>6])[0]
+   [""=>0],[K=>1],[M=>2],[G=>3],[T=>4],[P=>5],[E=>6])[0]
 } else {
    return '';
 }
@@ -596,17 +697,18 @@ sub get_multiple_wmi_samples {
 # pass in
 # number of samples to get
 # the WMI query to get the values you are wanting
-# the regular expression to extract the names of the values
-# the regular expression to extract the results
+# the regular expression to extract the names of the values (comma list like $value_rege not supported as this parameter is not really needed or hardly ever)
+# the regular expression to extract the results - we also support this being a comma delimited list of field numbers to be kept where we assume the field delimiter is | and that the field numbers start at 1 eg 1,4,5
 # an array reference where the results will be placed. Index 0 will contain the first values, index 1 the second values
 # the delay (passed to the sleep command) between queries. This is reference that "passed back" so that the calling sub can see what was actually used. Pass by reference using \$VARIABLE
 # An array reference listing the column titles that we should provide sums for
 #     There are several sums made available
 #     - array index [0][ROWNUMBER] prefixed by _QuerySum_fieldname which sums up all the fieldnames across multiple queries
 #     - array index [QUERYNUMBER][0] prefixed by _RowSum_fieldname which sums up all the fieldnames across multiple rows in a single query number QUERYNUMBER
+# set $slash_conversion to 1 if we should replace all / in the WMI query with \\
 
 # we return an empty string if it worked ok, a msg if it failed
-my ($num_samples,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums)=@_;
+my ($num_samples,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion)=@_;
 
 # the array @[$results} will look something like this when we have loaded it
 # @array[INDEX1][INDEX2]{HASH1}=VALUE
@@ -631,10 +733,26 @@ if ($$specified_delay) {
    }
 }
 
+# the WMI query may contain "variables" where we substitute values into
+# a variables looks like {SOMENAME}
+# if we find one of these we substitute values from the hash %the_arguments
+# eg {arg1} gets replaced by the value held in $the_arguments{'_arg1'}
+# this is how we pass command line arguments into the query
+$wmi_query=~s/\{(.*?)\}/$the_arguments{$1}/g;
+
+# we also need to make sure that any ' in the query are escaped
+$wmi_query=~s/'/\\'/g;
+
+if ($slash_conversion) {
+   # replace any / in the WMI query \\ since \ are difficult to use in linux on the command line
+   # we replace it with \\ to pass an actual \ to the command line
+   # use # as the delimiter for the regex to make it more readable (still need to escape / and \ though)
+   $wmi_query=~s#\/#\\\\#g;   
+}
+
 # How to use an alternate namespace using wmic
 # "SELECT * From rootdse" --namespace=root/directory/ldap
-
-$wmi_commandline = "$wmic_command -U ${opt_username}%${opt_password} //$the_arguments{'host'} '$wmi_query'";
+$wmi_commandline = "$wmic_command -U ${opt_username}%${opt_password} //$the_arguments{'_host'} '$wmi_query'";
 
 my $all_output=''; # this holds information if any errors are encountered
 
@@ -734,15 +852,26 @@ for (my $i=0;$i<$num_samples;$i++) {
             #FreePhysicalMemory|Name|TotalVisibleMemorySize
             #515204|Microsoft Windows XP Professional|C:\WINDOWS|\Device\Harddisk0\Partition1|1228272   
             my $use_split=1;
-            my $field_finding_regex='';
+            my $field_finding_regex='(.*?)\n'; # this is the default
+            my %keep_certain_fields=();
             if ($value_regex) {
-               # we will just use this regex to break up the fields
-               $field_finding_regex=$value_regex;
-               $use_split=0;
-            } else {
-               # we will just use split to break up the fields
-               # we need to set a basic regex for the loop
-               $field_finding_regex='(.*?)\n';
+               # $value_regex has 2 possibilities
+               # 1) a comma delimited list of data field numbers to be kept eg 1,2,4
+               # 2) a regular express to find the fields (still needed if the data contains \n)
+               if ($value_regex=~/([\d,]+)/) {
+                  # we will just use this regex to break up the fields
+                  # FORMAT: NUM:FIELDLIST where FIELDLIST is a comma delimited list of field numbers we want to retrieve
+                  # load up the hash that tells us which fields to keep
+                  foreach my $field (split(',',$value_regex)) {
+                     $keep_certain_fields{$field}=1;
+                  }
+                  $debug && print "KEEP ONLY THESE FIELDS=$value_regex\n";
+               } else {
+                  # we assume that this is a regex
+                  $field_finding_regex=$value_regex;
+                  $use_split=0; # do not use the split
+                  $debug && print "Using Custom Regex to find FIELDS\n";
+               }
             }
             
             # now loop through the returned records
@@ -753,12 +882,26 @@ for (my $i=0;$i<$num_samples;$i++) {
                # now we have matched a result row, so break it up into fields
                if ($use_split) {
                   @field_data=split(/\|/,$1);
-                  my $j=0;
+                  my $header_field_number=0;
+                  my $data_field_number=1; # these ones start from 1 since it makes it easier for the user to define - take care
                   $debug && print "FIELDS:";
                   foreach my $field (@field_data) {
-                     $debug && print "$field, ";
-                     $$results[$i][$found]{$column_names[$j]}=$field;
-                     $j++;
+                     my $use_field=1;
+                     if ($value_regex && ! exists($keep_certain_fields{$data_field_number})) {
+                        $debug && print "Drop Field #$data_field_number=$field\n";
+                        $use_field=0;
+                     }
+                     if ($use_field) {
+                        $debug && print "COLNAME=$column_names[$header_field_number],FIELD=$field\n";
+                        # If you got the regex wrong or some fields come back with | in them you will get 
+                        # "Use of uninitialized value within @column_names in hash element" error when using $column_names[$header_field_number]
+                        # hence use $column_names[$header_field_number]||''
+                        $$results[$i][$found]{$column_names[$header_field_number]||''}=$field;
+                        # only increment the header field number when we use it 
+                        $header_field_number++;
+                     }
+                     # always increment the data field number
+                     $data_field_number++;
                   }
                   $debug && print "\n";
                   $debug && print "Row Data Found OK\n";
@@ -774,6 +917,9 @@ for (my $i=0;$i<$num_samples;$i++) {
                   foreach my $regex_field (@hardcoded_field_list) {
                      $debug && print "$regex_field, ";
                      if ($regex_field ne '') {
+                        # If you ggot the regex wrong or some fields come back with | in them you will get 
+                        # "Use of uninitialized value within @column_names in hash element" error when using $column_names[$j]
+                        # hence use $column_names[$j]||''
                         $$results[$i][$found]{$column_names[$j]||''}=$regex_field;
                      }
                      $j++;
@@ -848,6 +994,9 @@ if ($display=~/\n/) {
    $combined="$display|$perfdata\n";
 }
 
+# if there is no perfdata | will be the last character - remove | if it is at the end
+$combined=~s/\|$//;
+
 #$debug && print "IN:$display|$perfdata\n";
 #$debug && print "OUT:$combined\n";
 return $combined;
@@ -871,8 +1020,8 @@ my $delimiter=', ';
 
 # add the arguments hash into the incoming data values
 foreach my $key (keys %the_arguments) {
-   # prefix all their names with _ to reduce the chance that they clash
-   $$values{"_$key"}=$the_arguments{$key};
+   # their names should already be starting with _ to reduce the chance that they clash
+   $$values{$key}=$the_arguments{$key};
 }
 
 
@@ -881,72 +1030,76 @@ my $i=0;
 $debug && print "---------- Building Up Display\n";
 $debug && print "Incoming Data " . Dumper($values);
 foreach my $field (@{$display_fields}) {
-   $debug && print "------- Processing $field\n";
-   my $this_delimiter=$delimiter;
-   my $this_real_field_name='';
-   my $this_display_field_name=''; # default display name
-   my $this_sep='='; # default separator
-   my $this_unit=''; # default display unit
-   my $this_value=''; # default display value
-   my $this_enclose='';
-   my $this_start_bracket='';
-   my $this_end_bracket='';
-
-   # the field name comes in this format
-   # 1) FIELD|UNITS|DISPLAY|SEP|DELIM|START|END
-   # 2) FIELD|UNITS
-   # 3) FIELD
+   if ($field ne '') {
+      $debug && print "------- Processing $field\n";
+      my $this_delimiter=$delimiter;
+      my $this_real_field_name='';
+      my $this_display_field_name=''; # default display name
+      my $this_sep='='; # default separator
+      my $this_unit=''; # default display unit
+      my $this_value=''; # default display value
+      my $this_enclose='';
+      my $this_start_bracket='';
+      my $this_end_bracket='';
    
-   if ($field=~/^(.*)\|(.*)\|(.*)\|(.*)\|(.*)\|(.*)\|(.*)$/) {
-      $debug && print "Complex Format:$1,$2,$3,$4,$5,$6,$7\n";
-      $this_real_field_name=$1;
-      $this_unit=$2;
-      $this_display_field_name=$3 || $this_real_field_name;
-      $this_sep=$4 || '=';
-      $this_delimiter=$5 || $delimiter;
-      $this_start_bracket=$6;
-      $this_end_bracket=$7;
-
-      # change .~ to nothing
-      $this_display_field_name=~s/~//g;
-      $this_sep=~s/~//g;
-      $this_delimiter=~s/~//g;
-
-   } elsif ($field=~/^(.*)\|(.*)$/) {
-      $debug && print "Simple Format:$1,$2\n";
-      $this_real_field_name=$1;
-      $this_unit=$2;
-      $this_display_field_name=$this_real_field_name;
+      # the field name comes in this format
+      # 1) FIELD|UNITS|DISPLAY|SEP|DELIM|START|END
+      # 2) FIELD|UNITS
+      # 3) FIELD
       
-   } elsif ($field!~/\|/) { # no | characters
-      $debug && print "Field Only Format:$field\n";
-      $this_real_field_name=$field;
-      $this_display_field_name=$this_real_field_name;
+      if ($field=~/^(.*)\|(.*)\|(.*)\|(.*)\|(.*)\|(.*)\|(.*)$/) {
+         $debug && print "Complex Format:$1,$2,$3,$4,$5,$6,$7\n";
+         $this_real_field_name=$1;
+         $this_unit=$2;
+         $this_display_field_name=$3 || $this_real_field_name;
+         $this_sep=$4 || '=';
+         $this_delimiter=$5 || $delimiter;
+         $this_start_bracket=$6;
+         $this_end_bracket=$7;
+   
+         # change .~ to nothing
+         $this_display_field_name=~s/~//g;
+         $this_sep=~s/~//g;
+         $this_delimiter=~s/~//g;
+   
+      } elsif ($field=~/^(.*)\|(.*)$/) {
+         $debug && print "Simple Format:$1,$2\n";
+         $this_real_field_name=$1;
+         $this_unit=$2;
+         $this_display_field_name=$this_real_field_name;
+         
+      } elsif ($field!~/\|/) { # no | characters
+         $debug && print "Field Only Format:$field\n";
+         $this_real_field_name=$field;
+         $this_display_field_name=$this_real_field_name;
+         
+      } else {
+         print "Invalid Display FIELD Specification: $field\n";
+      }
+   
+      # see if there are any "variables" in display name - they are enclosed in {} and match a key of the $value hash
+      # eg this replaces {DeviceID} by the value held in $$values{'DeviceID'}
+      $this_display_field_name=~s/\{(.*?)\}/$$values{$1}/g;
+      $this_start_bracket=~s/\{(.*?)\}/$$values{$1}/g;
+      $this_end_bracket=~s/\{(.*?)\}/$$values{$1}/g;
+     
+      #$debug && print "Loading up value using FIELD=$this_real_field_name\n";
+      # now we can extract the value
+      $this_value=$$values{$this_real_field_name};
       
-   } else {
-      print "Invalid Display FIELD Specification: $field\n";
+      # now see if we need to change the display value/unit
+      # by default we expect this just to be UNIT
+      # However, if prefixed with a # ie #UNIT eg #B, then we apply scaling to the UNIT
+      if ($this_unit=~/^#(.*)$/) {
+         # use the function to display the value and units
+         $this_value=scaled_bytes($this_value);
+         $this_unit=$1;
+      }
+      
+      $debug && print "$field ----> $this_start_bracket$this_display_field_name$this_sep$this_value$this_unit$this_end_bracket$this_delimiter\n";
+      $display_string.="$this_start_bracket$this_display_field_name$this_sep$this_value$this_unit$this_end_bracket$this_delimiter";
+      $i++;
    }
-
-   # see if there are any "variables" in display name - they are enclosed in {} and match a key of the $value hash
-   # eg this replaces {DeviceID} by the value held in $$values{'DeviceID'}
-   $this_display_field_name=~s/\{(.*?)\}/$$values{$1}/g;
-   $this_start_bracket=~s/\{(.*?)\}/$$values{$1}/g;
-   $this_end_bracket=~s/\{(.*?)\}/$$values{$1}/g;
-  
-   #$debug && print "Loading up value using FIELD=$this_real_field_name\n";
-   # now we can extract the value
-   $this_value=$$values{$this_real_field_name};
-   
-   # now see if we need to change the display value/unit
-   if ($this_unit eq 'scaledbytes') {
-      # use the function to display the value and units
-      $this_value=scaled_bytes($this_value);
-      $this_unit='';
-   }
-   
-   $debug && print "$field ----> $this_start_bracket$this_display_field_name$this_sep$this_value$this_unit$this_end_bracket$this_delimiter\n";
-   $display_string.="$this_start_bracket$this_display_field_name$this_sep$this_value$this_unit$this_end_bracket$this_delimiter";
-   $i++;
 }
 # remove the last delimiter
 $display_string=~s/$delimiter$//;
@@ -955,59 +1108,63 @@ $display_string=~s/$delimiter$//;
 $i=0;
 $debug && print "---------- Building Up Performance Data\n";
 foreach my $field (@{$performance_data_fields}) {
-   #$debug && print "------- Processing $field\n";
-   my $this_real_field_name=$field;
-   my $this_display_field_name=''; # default display name
-   my $this_unit=''; # default display unit
-   my $this_value=''; # default display value
-
-
-   # the field name comes in this format
-   # 1) FIELD|UNITS|DISPLAY
-   # 2) FIELD|UNITS
-   # 3) FIELD
-
+   if ($field ne '') {
+      $debug && print "------- Processing $field\n";
+      my $this_real_field_name=$field;
+      my $this_display_field_name=''; # default display name
+      my $this_unit=''; # default display unit
+      my $this_value=''; # default display value
    
-   if ($field=~/^(.*)\|(.*)\|(.*)$/) {
-      $debug && print "Complex Format:$1,$2,$3\n";
-      $this_real_field_name=$1;
-      $this_unit=$2;
-      $this_display_field_name=$3;
+   
+      # the field name comes in this format
+      # 1) FIELD|UNITS|DISPLAY
+      # 2) FIELD|UNITS
+      # 3) FIELD
+   
       
-   } elsif ($field=~/^(.*)\|(.*)$/) {
-      $debug && print "Simple Format:$1,$2\n";
-      $this_real_field_name=$1;
-      $this_unit=$2;
-      $this_display_field_name=$this_real_field_name;
+      if ($field=~/^(.*)\|(.*)\|(.*)$/) {
+         $debug && print "Complex Format:$1,$2,$3\n";
+         $this_real_field_name=$1;
+         $this_unit=$2;
+         $this_display_field_name=$3;
+         
+      } elsif ($field=~/^(.*)\|(.*)$/) {
+         $debug && print "Simple Format:$1,$2\n";
+         $this_real_field_name=$1;
+         $this_unit=$2;
+         $this_display_field_name=$this_real_field_name;
+         
+      } elsif ($field!~/\|/) { # no | characters
+         $debug && print "Field Only Format:$field\n";
+         $this_real_field_name=$field;
+         $this_display_field_name=$this_real_field_name;
+      } else {
+         print "Invalid Performance Data FIELD Specification: $field\n";
+      }
+   
+      # see if there are any "variables" in display name - they are enclosed in {} and match a key of the $value hash
+      # eg this replaces {DeviceID} by the value held in $$values{'DeviceID'}
+      $this_display_field_name=~s/\{(.*?)\}/$$values{$1}/g;
+      $this_unit=~s/\{(.*?)\}/$$values{$1}/g;
+         
       
-   } elsif ($field!~/\|/) { # no | characters
-      $debug && print "Field Only Format:$field\n";
-      $this_real_field_name=$field;
-      $this_display_field_name=$this_real_field_name;
-   } else {
-      print "Invalid Performance Data FIELD Specification: $field\n";
+      # $debug && print "Loading up value using FIELD=$this_real_field_name\n";
+      # now we can extract the value
+      $this_value=$$values{$this_real_field_name};
+      
+      # now see if we need to change the display value/unit
+      # by default we expect this just to be UNIT
+      # However, if prefixed with a # ie #UNIT eg #B, then we apply scaling to the UNIT
+      if ($this_unit=~/^#(.*)$/) {
+         # use the function to display the value and units
+         $this_value=scaled_bytes($this_value);
+         $this_unit=$1;
+      }
+      
+      $debug && print "$field (Field=$this_real_field_name) ----> '$this_display_field_name'=$this_value$this_unit;$$warning_specs{$this_real_field_name};$$critical_specs{$this_real_field_name}; \n";
+      $performance_data_string.="'$this_display_field_name'=$this_value$this_unit;$$warning_specs{$this_real_field_name};$$critical_specs{$this_real_field_name}; ";
+      $i++;
    }
-
-   # see if there are any "variables" in display name - they are enclosed in {} and match a key of the $value hash
-   # eg this replaces {DeviceID} by the value held in $$values{'DeviceID'}
-   $this_display_field_name=~s/\{(.*?)\}/$$values{$1}/g;
-   $this_unit=~s/\{(.*?)\}/$$values{$1}/g;
-      
-   
-   # $debug && print "Loading up value using FIELD=$this_real_field_name\n";
-   # now we can extract the value
-   $this_value=$$values{$this_real_field_name};
-   
-   # now see if we need to change the display value/unit
-   if ($this_unit eq 'scaledbytes') {
-      # use the function to display the value and units
-      $this_value=scaled_bytes($this_value);
-      $this_unit='';
-   }
-   
-   $debug && print "$field (Field=$this_real_field_name) ----> '$this_display_field_name'=$this_value$this_unit;$$warning_specs{$this_real_field_name};$$critical_specs{$this_real_field_name}; \n";
-   $performance_data_string.="'$this_display_field_name'=$this_value$this_unit;$$warning_specs{$this_real_field_name};$$critical_specs{$this_real_field_name}; ";
-   $i++;
 }
 
 # remove any ;; from performance data so that it contains only the minimum required
@@ -1017,21 +1174,156 @@ while ($performance_data_string=~s/;;/;/g) {}
 $debug && print "---------- Done\n";
 
 my $combined_string=combine_display_and_perfdata($display_string,$performance_data_string);
-
+ 
 return $display_string,$performance_data_string,$combined_string;
+}
+#-------------------------------------------------------------------------
+sub no_data_check {
+# controls how the plugin responds if no data is returned from the WMI query
+# the plugin can exit in this sub
+# pass in
+# the number of items returned in the WMI query ie the value of _ItemCount
+my ($itemcount)=@_;
+if ($the_arguments{'_nodata'}) {
+   # this means that the users wants to test filecount using warn/crit criteria 
+   # so we will not do our default behaviour
+   # default behaviour is to go warning/critical if the $itemcount==0 ie no data was returned
+   # this might mean that some other values might not be initialised so you will need to initialise them within each check before you call this sub eg for checkfilesize the value of FileSize will not get set if we do not find the file
+} else {
+   # we have to go warning/critical if the file does not exist
+   if ($itemcount==0) {
+      print "WMI Query returned no data. The item you were looking for may NOT exist.\n";
+      # we exit with the value the user specified in $the_arguments{'_nodataexit'}, if any
+      if ($the_arguments{'_nodataexit'} ge 0 && $the_arguments{'_nodataexit'} le 3) {
+         $debug && print "Exit with user defined exit code $the_arguments{'_nodataexit'}\n";
+         exit $the_arguments{'_nodataexit'};
+      } else {
+         exit $ERRORS{'CRITICAL'};
+      }
+   }
+}
+}
+#-------------------------------------------------------------------------
+sub checkini {
+# run a check as defined in the ini file
+my ($wmi_ini,$ini_section)=@_;
+# pass in 
+# the config::inifiles object
+# the section name in the ini file we have to process
+$debug && print "Processing INI Section: $ini_section\n";
+
+# change the $opt_mode to be the same as the section name
+# we need this since some things look up values by $opt_mode
+$opt_mode=$ini_section;
+
+# grab the query
+my $query=$wmi_ini->val($ini_section,'query','');
+
+if ($query) {
+
+   # now, optionally we need some fields to check warn/crit against
+   # these are in the testfield parameter(s)
+   my @test_fields_list=$wmi_ini->val($ini_section,'test','');
+   $debug && print "Test Fields: " . Dumper(\@test_fields_list);
+
+   # now we need some display fields (at least one)
+   my @display_fields_list=$wmi_ini->val($ini_section,'display','');
+   $debug && print "Display Fields: " . Dumper(\@display_fields_list);
+   
+   # and optionally get some perf data fields
+   my @perfdata_fields_list=$wmi_ini->val($ini_section,'perf','');
+   $debug && print "Perf Fields: " . Dumper(\@perfdata_fields_list);
+
+   if ($#display_fields_list>=0) {
+
+      # add all the test, display and perfdata fields to the global config variables so that our functions can find them when needed
+      $valid_test_fields{$opt_mode}=\@test_fields_list;
+      $display_fields{$opt_mode}=\@display_fields_list;
+      $performance_data_fields{$opt_mode}=\@perfdata_fields_list;
+      
+      my $requires_version=$wmi_ini->val($ini_section,'requires',0);
+      if ($VERSION < $requires_version) {
+         # this is a problem
+         print "This check ($opt_mode) requires at least version $requires_version of the plugin\n";
+         exit $ERRORS{'UNKNOWN'};
+      }
+      
+      # if --inihelp has been specified then show the help for this mode
+      if ($opt_inihelp) {
+         my $inihelp=$wmi_ini->val($ini_section,'inihelp','');
+         short_usage(1);
+         if ($inihelp) {
+            print "\n$inihelp\n";
+         }
+         print "\n";
+         print "Valid Warning/Critical Fields are: " . join(", ",@test_fields_list) . "\n";
+         exit;
+      }
+      
+      my $custom_header_regex=$wmi_ini->val($ini_section,'headerregex','');
+      my $custom_data_regex=$wmi_ini->val($ini_section,'dataregex','');
+
+      my @collected_data;
+      my $data_errors=get_multiple_wmi_samples(1,
+         "$query",
+         $custom_header_regex,$custom_data_regex,\@collected_data,\$the_arguments{'_delay'},undef,$wmi_ini->val($ini_section,'slashconversion',''));
+      
+      if ($data_errors) {
+         print "UNKNOWN: Could not retrieve all required data. $data_errors";
+         exit $ERRORS{'UNKNOWN'};
+      } else {
+         no_data_check($collected_data[0][0]{'_ItemCount'});
+
+         my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[0][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
+         my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[0][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
+         print $this_combined_data;
+      
+         exit $test_result;
+      }
+      
+   } else {
+      print "UNKNOWN: No displayfield(s) specified in ini file section '$ini_section'\n";
+      exit $ERRORS{'UNKNOWN'};
+   }
+
+} else {
+   print "UNKNOWN: Query not specified in ini file section '$ini_section'\n";
+   exit $ERRORS{'UNKNOWN'};
+}
+
+}
+#-------------------------------------------------------------------------
+sub checkgeneric {
+# I use this when I am playing around ........
+my @collected_data;
+my $data_errors=get_multiple_wmi_samples(1,
+   "SELECT * FROM Win32_PerfFormattedData_PerfDisk_PhysicalDisk where name = \"c:\"",
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+
+if ($data_errors) {
+   print "UNKNOWN: Could not retrieve all required data. $data_errors";
+   exit $ERRORS{'UNKNOWN'};
+} else {
+   my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[0][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
+   my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[0][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
+   print $this_combined_data;
+
+   exit $test_result;
+}
+
 }
 #-------------------------------------------------------------------------
 sub checkcpu {
 
 # set default delay for this mode
-if ($the_arguments{'delay'} eq '') {
-   $the_arguments{'delay'}=10;
+if ($the_arguments{'_delay'} eq '') {
+   $the_arguments{'_delay'}=5;
 }
 
 my @collected_data;
 my $data_errors=get_multiple_wmi_samples(2,
    "select PercentProcessorTime,Timestamp_Sys100NS from Win32_PerfRawData_PerfOS_Processor where Name=\"_Total\"",
-   '','',\@collected_data,\$the_arguments{'delay'},undef);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
@@ -1061,17 +1353,17 @@ my @collected_data;
 
 # for network stuff we often want $actual_bytefactor to be 1000
 # so lets use that unless the user has set something else
-if (!$the_arguments{'bytefactor'}) {
+if (!$the_arguments{'_bytefactor'}) {
    $actual_bytefactor=1000;
 }
 
 my $where_bit='';
-if ($the_arguments{'arg1'} ne '') {
-   $where_bit="where Name=\"$the_arguments{'arg1'}\"";
+if ($the_arguments{'_arg1'} ne '') {
+   $where_bit="where Name=\"$the_arguments{'_arg1'}\"";
 }
 my $data_errors=get_multiple_wmi_samples(1,
    "select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfFormattedData_Tcpip_NetworkInterface $where_bit",
-   '','',\@collected_data,\$the_arguments{'delay'},undef);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
@@ -1100,19 +1392,19 @@ if ($data_errors) {
 #-------------------------------------------------------------------------
 sub checkcpuq {
 # set default delay for this mode
-if ($the_arguments{'delay'} eq '') {
-   $the_arguments{'delay'}=1;
+if ($the_arguments{'_delay'} eq '') {
+   $the_arguments{'_delay'}=1;
 }
 
 # set default number of checks if not specified
-if (!$the_arguments{'arg1'}) {
-   $the_arguments{'arg1'}=3;
+if (!$the_arguments{'_arg1'}) {
+   $the_arguments{'_arg1'}=3;
 }
 
 my @collected_data;
-my $data_errors=get_multiple_wmi_samples($the_arguments{'arg1'},
+my $data_errors=get_multiple_wmi_samples($the_arguments{'_arg1'},
    "select ProcessorQueueLength from Win32_PerfRawData_PerfOS_System",
-   '','',\@collected_data,\$the_arguments{'delay'},[ 'ProcessorQueueLength' ]);
+   '','',\@collected_data,\$the_arguments{'_delay'},[ 'ProcessorQueueLength' ],0);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
@@ -1137,7 +1429,8 @@ my @collected_data;
 my $data_errors='';
 
 my $display_type='';
-if ($the_arguments{'arg1'} eq "physical") {
+# still support for the old usage of arg1
+if ($the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i) {
    $collected_data[0][0]{'MemType'}='Physical Memory';
    # expect output like
    #CLASS: Win32_OperatingSystem
@@ -1147,14 +1440,14 @@ if ($the_arguments{'arg1'} eq "physical") {
    # we only want data fields 1 4 5 so that we match the column headings
    $data_errors=get_multiple_wmi_samples(1,
    "Select Name,FreePhysicalMemory,TotalVisibleMemorySize from Win32_OperatingSystem",
-   '','(.*?)\|.*?\|.*?\|(.*?)\|(.*?)\n',\@collected_data,\$the_arguments{'delay'},undef);
+   '','1,4,5',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
    # this query returns FreePhysicalMemory,TotalVisibleMemorySize - we move them to the standard fields of _MemFreeK and _MemTotalK so that we can process them in a standard way
    # if there has been a problem with the query then they might not be set
    $collected_data[0][0]{'_MemFreeK'}=$collected_data[0][0]{'FreePhysicalMemory'}||0;
    $collected_data[0][0]{'_MemTotalK'}=$collected_data[0][0]{'TotalVisibleMemorySize'}||0;
 
-} elsif ($the_arguments{'arg1'} eq "page") {
+} elsif ($the_arguments{'_arg1'}=~/page/i || $opt_submode=~/page/i) {
    $collected_data[0][0]{'MemType'}='Page File';
    # expect output like
    #CLASS: Win32_OperatingSystem
@@ -1164,7 +1457,7 @@ if ($the_arguments{'arg1'} eq "physical") {
    # we only want data fields 1 4 5 so that we match the column headings
    $data_errors=get_multiple_wmi_samples(1,
    "Select Name,FreeVirtualMemory,TotalVirtualMemorySize from Win32_OperatingSystem",
-   '','(.*?)\|.*?\|.*?\|(.*?)\|(.*?)\n',\@collected_data,\$the_arguments{'delay'},undef);
+   '','1,4,5',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
    # this query returns FreePhysicalMemory,TotalVisibleMemorySize - we move them to the standard fields of _MemFreeK and _MemTotalK so that we can process them in a standard way
    # if there has been a problem with the query then they might not be set
@@ -1172,7 +1465,7 @@ if ($the_arguments{'arg1'} eq "physical") {
    $collected_data[0][0]{'_MemTotalK'}=$collected_data[0][0]{'TotalVirtualMemorySize'}||0;
 
 } else {
-   print "UNKNOWN: invalid argument in the checkmem function - should be page or physical.\n";
+   print "UNKNOWN: invalid SUBMODE in the checkmem function - should be page or physical.\n";
    exit $ERRORS{'UNKNOWN'};
 }
 
@@ -1206,17 +1499,11 @@ sub checkfileage {
 
 use DateTime;
 
-# replace any / in the $the_arguments{'arg1'} with \\ since \ are difficult to use in linux on the command line
-# we replace it with \\ to pass an actual \ to the command line
-# use # as the delimiter for the regex to make it more readable
-my $internal_opt_arguments=$the_arguments{'arg1'};
-$internal_opt_arguments=~s#\/#\\\\#g;
-
 my $perf_data_unit='hr'; # default unit is hours
 # if the user specifies it but it is not valid we silently fail
-if (defined($time_multipliers{$the_arguments{'arg2'}})) {
+if (defined($time_multipliers{$the_arguments{'_arg2'}})) {
    # looks like the user has specified a valid time multiplier for use in the performance data
-   $perf_data_unit=$the_arguments{'arg2'};  
+   $perf_data_unit=$the_arguments{'_arg2'};  
 }
 my $perf_data_divisor=$time_multipliers{$perf_data_unit};
 
@@ -1226,8 +1513,8 @@ $opt_z='';
 my @collected_data;
 
 my $data_errors=get_multiple_wmi_samples(1,
-   "Select name,lastmodified from CIM_DataFile where name=\"$internal_opt_arguments\"",
-   '','',\@collected_data,\$the_arguments{'delay'},undef);
+   "Select name,lastmodified from CIM_DataFile where name=\"$the_arguments{'_arg1'}\"",
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,1);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
@@ -1287,7 +1574,7 @@ if ($data_errors) {
          exit $ERRORS{'UNKNOWN'};
       }
    } else {
-      print "UNKNOWN: Could not find the file $the_arguments{'arg1'}";
+      print "UNKNOWN: Could not find the file $the_arguments{'_arg1'}";
       exit $ERRORS{'UNKNOWN'};
    }
    
@@ -1296,44 +1583,21 @@ if ($data_errors) {
 }
 #-------------------------------------------------------------------------
 sub checkfilesize {
-# replace any / in the $the_arguments{'arg1'} with \\ since \ are difficult to use in linux on the command line
-# we replace it with \\ to pass an actual \ to the command line
-# use # as the delimiter for the regex to make it more readable (still need to escape / and \ though)
-my $internal_opt_arguments=$the_arguments{'arg1'};
-$internal_opt_arguments=~s#\/#\\\\#g;
-
 my @collected_data;
 # have to initialise this incase the file is not found
 $collected_data[0][0]{'FileSize'}=0;
 $collected_data[0][0]{'_FileCount'}=0;
 
 my $data_errors=get_multiple_wmi_samples(1,
-   "Select name,filesize from CIM_DataFile where name=\"$internal_opt_arguments\"",
-   '','',\@collected_data,\$the_arguments{'delay'},undef);
+   "Select name,filesize from CIM_DataFile where name=\"$the_arguments{'_arg1'}\"",
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,1);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
    exit $ERRORS{'UNKNOWN'};
 } else {
 
-   if ($the_arguments{'arg2'}) {
-      # other args specified
-      # this means that the users wants to test filecount using warn/crit criteria 
-      # so we will not do our default behaviour
-      # default behaviour is to go warning/critical if the filecount==0 ie the file does not exist
-      # this might mean that the FileSize does not exist so we have to initialised it at the start of this whole sub
-   } else {
-      # we have to go warning/critical if the file does not exist
-      if ($collected_data[0][0]{'_ItemCount'}==0) {
-         print "File $the_arguments{'arg1'} does NOT exist.";
-         # we exit with the value the user specified in $the_arguments{'arg3'}, if any
-         if ($the_arguments{'arg3'} ge 0 && $the_arguments{'arg3'} le 3) {
-            exit $the_arguments{'arg3'};
-         } else {
-            exit $ERRORS{'CRITICAL'};
-         }
-      }
-   }
+   no_data_check($collected_data[0][0]{'_ItemCount'});
 
    my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[0][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
    my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[0][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
@@ -1347,34 +1611,29 @@ if ($data_errors) {
 #-------------------------------------------------------------------------
 sub checkfoldersize {
 # make sure the path ends with a / to make sure we only get matching folders
-if ($the_arguments{'arg1'}!~/\/$/) {
+if ($the_arguments{'_arg1'}!~/\/$/) {
    # no slash on the end so add it
-   $the_arguments{'arg1'}="$the_arguments{'arg1'}/";
+   $the_arguments{'_arg1'}="$the_arguments{'_arg1'}/";
 }
 
 # we split up the query to drive letter and path since this should be faster than a linear search for all matching filenames
 my $drive_letter='';
 my $path='';
-if ($the_arguments{'arg1'}=~/^(\w:)(.*)/) {
+if ($the_arguments{'_arg1'}=~/^(\w:)(.*)/) {
    $drive_letter=$1;
    $path=$2;
 } else {
-   print "Could not extract drive letter and path from $the_arguments{'arg1'}\n";
+   print "Could not extract drive letter and path from $the_arguments{'_arg1'}\n";
    exit $ERRORS{'UNKNOWN'};
 }
 
 my $wildcard='';
 my $operator='=';
-if ($the_arguments{'arg4'} eq 's') {
+if ($the_arguments{'_arg4'} eq 's') {
    # we want to get all sub dirs as well
    $wildcard='%';
    $operator='like';
 }
-
-# replace any / in the $the_arguments{'arg1'} with \\ since \ are difficult to use in linux on the command line
-# we replace it with \\ to pass an actual \ to the command line
-# use # as the delimiter for the regex to make it more readable
-$path=~s#\/#\\\\#g;
 
 my @collected_data;
 
@@ -1383,31 +1642,14 @@ $collected_data[0][0]{'_FolderSize'}=0;
 
 my $data_errors=get_multiple_wmi_samples(1,
    "Select name,filesize from CIM_DataFile where drive=\"$drive_letter\" AND path $operator \"${path}$wildcard\"",
-   '','',\@collected_data,\$the_arguments{'delay'},['FileSize']);
+   '','',\@collected_data,\$the_arguments{'_delay'},['FileSize'],1);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
    exit $ERRORS{'UNKNOWN'};
 } else {
 
-   if ($the_arguments{'arg2'}) {
-      # other args specified
-      # this means that the users wants to test filecount/foldersize using warn/crit criteria 
-      # so we will not do our default behaviour
-      # default behaviour is to go warning/critical if the foldercount==0 ie the file does not exist
-      # this might mean that the _FolderSize does not exist so we have to initialised it at the start of this whole sub
-   } else {
-      # we have to go warning/critical if the folder does not exist
-      if ($collected_data[0][0]{'_ItemCount'}==0) {
-         print "Folder $the_arguments{'arg1'} does NOT exist.";
-         # we exit with the value the user specified in $the_arguments{'arg3'}, if any
-         if ($the_arguments{'arg3'} ge 0 && $the_arguments{'arg3'} le 3) {
-            exit $the_arguments{'arg3'};
-         } else {
-            exit $ERRORS{'CRITICAL'};
-         }
-      }
-   }
+   no_data_check($collected_data[0][0]{'_ItemCount'});
 
    # Load the _FolderSize so that the user can specify warn/critical criteria
    $collected_data[0][0]{'_FolderSize'}=$collected_data[0][0]{'_RowSum_FileSize'}||0; # this was automatically calculated for us
@@ -1435,7 +1677,7 @@ my $where_time_part="TimeGenerated > \"" . $age->year . sprintf("%02d",$age->mon
 my @collected_data;
 my $data_errors=get_multiple_wmi_samples(1,
    "Select SourceName,Message from Win32_NTLogEvent where Logfile=\"Application\" and EventType < 2 and SourceName = \"Windows Server Update Services\" and $where_time_part",
-   '','',\@collected_data,\$the_arguments{'delay'},undef);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
@@ -1462,10 +1704,25 @@ if ($data_errors) {
 #-------------------------------------------------------------------------
 sub checkprocess {
 
+my $query_field='Name';
+if ($opt_submode=~/c/i) {
+   $query_field='CommandLine';
+}
+
+my $listing_field='Name';
+if ($the_arguments{'_arg2'}=~/c/i) {
+   $listing_field='CommandLine';
+}
+
+# arg1 might have / in it
+# replace any / with . for searching purposes only
+my $process_regex=$the_arguments{'_arg1'};
+$process_regex=~s#\/#\\\\#g;
+
 my @collected_data;
 my $data_errors=get_multiple_wmi_samples(1,
-   "select Name from Win32_Process",
-   '','',\@collected_data,\$the_arguments{'delay'},undef);
+   "select Name,CommandLine from Win32_Process",
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
@@ -1477,7 +1734,8 @@ if ($data_errors) {
    # so we want to loop through all the rows in the first query result $collected_data[0] and keep only the ones matching the regex
    my @new_data=();
    foreach my $row (@{$collected_data[0]}) {
-      if ( $$row{'Name'}=~/$the_arguments{'arg1'}/i ) {
+      # use # as the reg ex delimiter since the user might specify /
+      if ( $$row{$query_field}=~/$process_regex/i ) {
          # this process should be included
          push(@new_data,$row);
       }
@@ -1491,11 +1749,10 @@ if ($data_errors) {
 
    my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[0][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 
-   $collected_data[0][0]{'SearchString'}=$the_arguments{'arg1'};
    $collected_data[0][0]{'ProcessList'}='';
 
    if ($collected_data[0][0]{'_ItemCount'}>0) {
-      $collected_data[0][0]{'ProcessList'}=" (List is on next line)\nThe process(es) found are " . list_collected_values_from_all_rows(\@collected_data,['Name'],", ",'',1);
+      $collected_data[0][0]{'ProcessList'}=" (List is on next line)\nThe process(es) found are " . list_collected_values_from_all_rows(\@collected_data,[$listing_field],",   ",'',1);;
    }
 
    my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[0][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
@@ -1509,7 +1766,7 @@ sub checkservice {
 # ------------------------ checking all services
 my $where_bit='';
 my $auto_mode='';
-if (lc($the_arguments{'arg1'}) eq 'auto') {
+if (lc($the_arguments{'_arg1'}) eq 'auto') {
    # for this query we need to look for all automatic services
    # check that all auto services are 
    # STARTED=True, STATE=Running and STATUS=OK
@@ -1532,7 +1789,7 @@ if (lc($the_arguments{'arg1'}) eq 'auto') {
 my @collected_data;
 my $data_errors=get_multiple_wmi_samples(1,
    "select displayname, Started, StartMode, State, Status FROM Win32_Service $where_bit",
-   '','',\@collected_data,\$the_arguments{'delay'},undef);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
@@ -1545,19 +1802,26 @@ if ($data_errors) {
    my $num_bad=0;
    # so we want to loop through all the rows in the first query result $collected_data[0]
    foreach my $row (@{$collected_data[0]}) {
-      $debug && print Dumper($row);
-      if (  $auto_mode || 
-            ( !$auto_mode && ($$row{'DisplayName'}=~/$the_arguments{'arg1'}/i || $$row{'Name'}=~/$the_arguments{'arg1'}/i) ) 
-         ) {
-         if ($$row{'Started'} eq 'True' && $$row{'State'} eq 'Running' && $$row{'Status'} eq 'OK') {
-            $num_ok++;
-            if (!$auto_mode) {
-               # if we have using the regex mode then list out the services we find
+      $debug && print "Service Info: " . Dumper($row);
+      # in the middle of the WMI output there are lines like:
+      # CLASS: Win32_Service
+      # CLASS: Win32_TerminalService
+      # which means DisplayName and Name might not be set so we need to test for this to stop
+      # "Use of uninitialized value in pattern match" errors
+      if ($$row{'DisplayName'} && $$row{'Name'}) {
+         if (  $auto_mode || 
+               ( !$auto_mode && ($$row{'DisplayName'}=~/$the_arguments{'_arg1'}/i || $$row{'Name'}=~/$the_arguments{'_arg1'}/i) ) 
+            ) {
+            if ($$row{'Started'} eq 'True' && $$row{'State'} eq 'Running' && $$row{'Status'} eq 'OK') {
+               $num_ok++;
+               if (!$auto_mode) {
+                  # if we have using the regex mode then list out the services we find
+                  $result_text.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
+               }
+            } else {
+               $num_bad++;
                $result_text.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
             }
-         } else {
-            $num_bad++;
-            $result_text.="'$$row{'DisplayName'}' ($$row{'Name'}) is $$row{'State'}, ";
          }
       }
    }
@@ -1588,7 +1852,7 @@ my @collected_data;
 #33166
 my $data_errors=get_multiple_wmi_samples(1,
    "Select SystemUpTime from Win32_PerfFormattedData_PerfOS_System",
-   '','',\@collected_data,\$the_arguments{'delay'},undef);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
@@ -1624,7 +1888,7 @@ sub checkdrivesize {
 my @collected_data;
 my $data_errors=get_multiple_wmi_samples(1,
    "Select DeviceID,freespace,Size,VolumeName from Win32_LogicalDisk where DriveType=3",
-   '','',\@collected_data,\$the_arguments{'delay'},['FreeSpace','Size']);
+   '','',\@collected_data,\$the_arguments{'_delay'},['FreeSpace','Size'],0);
 
 #CLASS: Win32_LogicalDisk
 #DeviceID|FreeSpace|Size|VolumeName
@@ -1643,7 +1907,7 @@ if ($data_errors) {
    my $num_warning=0;
    my $alldisk_identifier='Overall Disk';
 
-   if ($the_arguments{'arg3'}) {
+   if ($the_arguments{'_arg3'}) {
       # include the system totals
       # now we want to add a index before 0 so we copy everything from index 0 and unshift it to the front
       # we do it like this so that all the derived values normally stored in index 0 will remain there
@@ -1668,8 +1932,8 @@ if ($data_errors) {
    foreach my $row (@{$collected_data[0]}) {
       # make sure $$row{'VolumeName'} is initialised (it won't be unless the drive has been named)
       $$row{'VolumeName'}=$$row{'VolumeName'} || '';
-      # if $the_arguments{'arg1'} is left out it will be blank and will match all drives
-      if ($$row{'DeviceID'}=~/$the_arguments{'arg1'}/i || $$row{'VolumeName'}=~/$the_arguments{'arg1'}/i || ($$row{'DeviceID'} eq $alldisk_identifier && $the_arguments{'arg3'}) ) {
+      # if $the_arguments{'_arg1'} is left out it will be blank and will match all drives
+      if ($$row{'DeviceID'}=~/$the_arguments{'_arg1'}/i || $$row{'VolumeName'}=~/$the_arguments{'_arg1'}/i || ($$row{'DeviceID'} eq $alldisk_identifier && $the_arguments{'_arg3'}) ) {
          # include this drive in the results
          if ($$row{'Size'}>0) {
             # got valid data
@@ -1693,7 +1957,7 @@ if ($data_errors) {
             # by default, in the performance data we use the drive letter to identify the drive
             # if the user has specified $other_opt_arguments=1 then we use the volume name (if it has one)
             my $drive_identifier=$$row{'DeviceID'};
-            if ($the_arguments{'arg2'} && exists($$row{'VolumeName'})) {
+            if ($the_arguments{'_arg2'} && exists($$row{'VolumeName'})) {
                if ($$row{'VolumeName'}) {
                   $drive_identifier=$$row{'VolumeName'};
                }
@@ -1728,7 +1992,7 @@ if ($data_errors) {
          exit $ERRORS{'OK'};
       }
    } else {
-      print "UNKNOWN: Could not find a drive matching '$the_arguments{'arg1'}'. Available Drives are " . list_collected_values_from_all_rows(\@collected_data,['DeviceID'],', ','',0);
+      print "UNKNOWN: Could not find a drive matching '$the_arguments{'_arg1'}'. Available Drives are " . list_collected_values_from_all_rows(\@collected_data,['DeviceID'],', ','',0);
       exit $ERRORS{'UNKNOWN'};
    }
 
@@ -1745,37 +2009,37 @@ my %severity_level=(
 # set default values if not specified
 
 # name of log
-if (!$the_arguments{'arg1'}) {
-   $the_arguments{'arg1'}='System';
+if (!$the_arguments{'_arg1'}) {
+   $the_arguments{'_arg1'}='System';
 }
 
 # severity level
-if (!exists($severity_level{$the_arguments{'arg2'}})) {
-   $the_arguments{'arg2'}=1;
+if (!exists($severity_level{$the_arguments{'_arg2'}})) {
+   $the_arguments{'_arg2'}=1;
 }
 
 # numer of past hours to check
-if (!$the_arguments{'arg3'}) {
-   $the_arguments{'arg3'}=1;
+if (!$the_arguments{'_arg3'}) {
+   $the_arguments{'_arg3'}=1;
 }
 
 use DateTime;
 # the date and time are stored in GMT in the event log so we need to query it based on that
-my $age = DateTime->now(time_zone => 'gmt')->subtract(hours => $the_arguments{'arg3'});
+my $age = DateTime->now(time_zone => 'gmt')->subtract(hours => $the_arguments{'_arg3'});
 my $where_time_part="TimeGenerated > \"" . $age->year . sprintf("%02d",$age->month) . sprintf("%02d",$age->day) . sprintf("%02d",$age->hour) . sprintf("%02d",$age->minute) . "00.00000000\""; # for clarity
 
 my @collected_data;
 # we have to use a custom regex to find these fields since the individual fields may contain \n themselves which stuffs up the standard regex
 my $data_errors=get_multiple_wmi_samples(1,
-   "Select SourceName,Message,TimeGenerated from Win32_NTLogEvent where Logfile=\"$the_arguments{'arg1'}\" and EventType<=$the_arguments{'arg2'} and EventType>0 and SourceName <> \"Microsoft-Windows-PrintSpooler\" and SourceName <> \"TermServDevices\" and $where_time_part",
-   '','(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\n',\@collected_data,\$the_arguments{'delay'},undef);
+   "Select SourceName,Message,TimeGenerated from Win32_NTLogEvent where Logfile=\"$the_arguments{'_arg1'}\" and EventType<=$the_arguments{'_arg2'} and EventType>0 and SourceName <> \"Microsoft-Windows-PrintSpooler\" and SourceName <> \"TermServDevices\" and $where_time_part",
+   '','(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\n',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 if ($data_errors) {
    print "UNKNOWN: Could not retrieve all required data. $data_errors";
    exit $ERRORS{'UNKNOWN'};
 } else {
 
-   $collected_data[0][0]{'_SeverityType'}=$severity_level{$the_arguments{'arg2'}};
+   $collected_data[0][0]{'_SeverityType'}=$severity_level{$the_arguments{'_arg2'}};
    $collected_data[0][0]{'_EventList'}='';
 
    if ($collected_data[0][0]{'_ItemCount'}>0) {
@@ -1786,7 +2050,7 @@ if ($data_errors) {
    my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[0][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
    print $this_combined_data;
 
-   #print "$num_events event(s) of severity level '$severity_level{$the_arguments{'arg2'}}' were recorded in the last $the_arguments{'arg3'} hours in the $the_arguments{'arg1'} eventlog.|$performance_data\n$result_text";
+   #print "$num_events event(s) of severity level '$severity_level{$the_arguments{'_arg2'}}' were recorded in the last $the_arguments{'_arg3'} hours in the $the_arguments{'_arg1'} eventlog.|$performance_data\n$result_text";
    exit $test_result;
 }
 }
