@@ -1,4 +1,4 @@
-check_wmi_plus v1.62
+check_wmi_plus v1.63
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -423,6 +423,7 @@ checknetwork
       specify exactly what you want. eg "LAN0" or "192.168.0.1" or "192.168.0" or "LAN0|LAN2" or "." or "08:00:27:85:CE:6D" or "08:00:27"
       To specify a network interface you can use either the Connection Name (as seen in Control Panel), IP Address (IPv4 or IPV6) or MAC Address. You can also use the name of the network adaptors as seen from WMI which is similar to what is seen in the output of the ipconfig/all command on Windows. However, it is not exactly the same and can be tricky since this uses a regular expression. Run without -a to show the interface
       names, IP Addresses, MAC Addresses. Typically you need to use '' around the adapter name when specifying.
+   ARG2  Set this to the string 'legacy' to query the older WMI class (Win32_PerfRawData_Tcpip_NetworkInterface) for obtaining network statistics. You may need to do this for Windows Server versions prior to Windows Server 2012.
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate.
    WARN/CRIT  can be used as described below.
       Valid Warning/Critical Fields are: CurrentBandwidth (Default), _PacketsSentPersec, _PacketsReceivedPersec, OutputQueueLength, PacketsReceivedErrors, _BytesSentPersec, _BytesReceivedPersec, _SendBytesUtilisation, _ReceiveBytesUtilisation

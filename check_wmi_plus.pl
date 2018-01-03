@@ -43,7 +43,7 @@ use lib "/usr/lib64/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.62;
+our $VERSION=1.63;
 
 # which version of PRO (if used does this require)
 our $requires_PRO_VERSION=1.28;
@@ -1758,8 +1758,12 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
       # 1) good results formatted nicely
       # 2) errors
       
-      if ($output=~/CLASS: \w+\n/sg) {
+      my $class_row_content='';
+      if ($output=~/(CLASS: \w+)\n/sg) {
          # looks like we have some results
+         # sometimes the CLASS line repeats, so we store it for later
+         $class_row_content=$1;
+         $debug && print "Storing Class Row:$class_row_content\n";
          
          # now, if $column_name_regex is specified then we have to use the regex to look for the column names
          # else we just look for the next line and split it on |
@@ -1800,6 +1804,8 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
             if ($output=~/(.*?)\n/sg) {
                $got_header=1;
                $header_row_content=$1;
+               $debug && print "Storing Header Row:$header_row_content\n";
+
                # we just use split to break out the column titles
                @column_names=split(/$wmic_split_delimiter/,$1);
                $last_header_field_number=$#column_names;
@@ -1849,20 +1855,20 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                my $row_data_valid=1;
                my $row_data=$1; # this is the entire string matched (only works if $use_split=1)
                # use of $& slows down all program regexes - only turn this on if needed
-               # $debug && print "\nLooking at Data Row: $&";
+               $debug && print "\nLooking at Data Row: $&";
                if ($use_split) {
                   @field_data=split(/$wmic_split_delimiter/,$row_data);
                   
                   # check that the row data looks valid
                   # to be valid
-                  # 1) the row should have the same number of fields (it can be up to only 1 field less) as the header row (there have been reports that the CLASS: line repeats throughout the content
+                  # 1) the row should have the same number of fields (it can be up to only 1 field less) as the header row (there have been reports that the CLASS: line and/or the header line repeats throughout the content
                   # 2) the row should not be the same as the header row (there have been reports that the header row sometimes repeats throughout the content)
                   # If we are using $value_regex to find the fields then all that goes out the window and we have to assume it is ok
                   # we allow it to be up to one field less because in some cases if the row data is like
                   # 1|2|3| and the 4th field is empty, the split actually only returns an array with 3 elements instead of 4
                   # checkdrivesize with drives that do not have volume names have this problem
                   # so to fix this the field count should be the same as the header row or only one less
-                  if ( ($last_header_field_number-$#field_data<=1 && $row_data ne $header_row_content) || $value_regex) {
+                  if ( ($last_header_field_number-$#field_data<=1 && $row_data ne $header_row_content && $row_data ne $class_row_content) || $value_regex) {
                      my $header_field_number=0;
                      my $data_field_number=1; # these ones start from 1 since it makes it easier for the user to define - take care
                      $debug && print "FIELDS (via Split):";
@@ -1892,6 +1898,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                      }
                   } else {
                      $row_data_valid=0;
+                     $debug && print "Row data is not valid\n";
                   }
                } else {
                   my $j=0;
@@ -1915,6 +1922,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                }
                
                # only process and count as found if the row data is valid
+               $debug && print "Row Data Valid = $row_data_valid\n";
                if ($row_data_valid) {
                   $debug && print "\n";
                   $debug && print "Row Data Found OK\n";
@@ -1932,7 +1940,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   # increment the results counter for this query
                   $found++;
                } else {
-                  $debug && print "Probably an invalid row. Valid row test is $last_header_field_number-$#field_data<=1 && $row_data ne $header_row_content\n";
+                  $debug && print "Probably an invalid row. Valid row test is $last_header_field_number-$#field_data<=1 && $row_data ne $header_row_content && $row_data ne $class_row_content\n";
                }
             }
             # record the number of rows found for this query
@@ -2503,6 +2511,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
 } elsif ($function eq 'PERF_AVERAGE_TIMER') {
    # NOT YET TESTED
+   # refer https://msdn.microsoft.com/en-us/library/ms804010.aspx?f=255&MSPPError=-2147217396
    # it requires two completed WMI queries (sample=2)
    # Formula = ((Nx - N0)/F ) / ((Dx - D0) )
    # we assume that the Timefield (D) we need is Timestamp_Sys100NS
@@ -2520,10 +2529,22 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    if ($$wmidata[$query_index][0]{'_ChecksOK'}>=2) {
       my @parameter=split(',',$function_parameters);
       if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]})) {
-         $debug && print "Core Calc: ( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} ) / 
-                       (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) ) = ";
-         $final_result=( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/ 
-                       (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) ) ;
+#         Old Calc which has the timestamp as the denominator - new calc inverts it
+#         $debug && print "OLD Core Calc: ( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} ) / 
+#                       (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) ) = ";
+#         # old - maybe incorrect
+#         $final_result=( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/ 
+#                       (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) ) ;
+         # divide by zero protection
+         $debug && print "Core Calc: ( ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/ 
+                       (    ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) ) = ";
+         if (  ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]})==0  ) {
+           $debug && print "Denominator is zero - cannot calculate result - forcing result to zero\n"; 
+           $final_result=0;
+         } else {
+            $final_result=( ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/ 
+                       (    ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) ) ;
+         }
          check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
          if ($parameter[1]) {
@@ -2560,8 +2581,14 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]}) && looks_like_number($$wmidata[$query_index][$which_row]{$parameter[1]})) {
          $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
                        ($$wmidata[$query_index][$which_row]{$parameter[1]} - $$wmidata[0][$which_row]{$parameter[1]}) = ";
-         $final_result=($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         # divide by zero protection
+         if (  ($$wmidata[$query_index][$which_row]{$parameter[1]} - $$wmidata[0][$which_row]{$parameter[1]})==0  ) {
+           $debug && print "Denominator is zero - cannot calculate result - forcing result to zero\n"; 
+           $final_result=0;
+         } else {
+            $final_result=($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
                        ($$wmidata[$query_index][$which_row]{$parameter[1]} - $$wmidata[0][$which_row]{$parameter[1]});
+         }
          check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
          if ($parameter[2]) {
@@ -2738,6 +2765,37 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    }
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
+} elsif ($function eq 'v_real32tofloat') {
+   # it requires one completed WMI queries 
+   # the parameters for this "function" are
+   # SOURCEFIELD1,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD1 [0] is a WMI field name which contains some number or just a number 
+   # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
+   #
+   my $final_result='CALC_FAIL';
+   # this function requires only 1 WMI data result set. don't worry about checking it
+   my @parameter=split(',',$function_parameters);
+
+   my $first_value=$parameter[0];
+   if (!looks_like_number($first_value)) {
+      # assume it is actually a WMI field name and so use the value in the field
+      $first_value=$$wmidata[$query_index][$which_row]{$parameter[0]};
+      $debug && print "v_real32tofloat: Assuming that the specified value ($parameter[0]) is actually a WMI Field name and hence using the value '$first_value' for the calculation\n";
+   }
+   
+   if (looks_like_number($first_value)) {
+      $debug && print "Core Calc: v_real32tofloat $first_value = ";
+      $final_result=unpack "f", pack "L", $first_value;
+      $debug && print " $final_result\n";
+      if ($parameter[1]) {
+         $final_result=sprintf($parameter[1],$final_result);
+      }
+   } else {
+      $debug && print "WARNING: The value in one of the requested fields ($parameter[0]) does not look like a number - we got '$first_value'\n";
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
 } elsif ($function eq 'WMITimestampToAgeSec') {
    # it requires one completed WMI query
    # the parameters for this "function" are
@@ -2812,7 +2870,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # customfield=_almost_total_vm_memory,HYPERV_TOTALVM_MEMORY,Value1GGPApages,Value2MGPApages,Value4KGPApages,DepositedPages 
    # select Name,Value1GGPApages,Value2MGPApages,Value4KGPApages,DepositedPages from Win32_PerfRawData_HvStats_HyperVHypervisorPartition 
    # it requires 1 completed WMI queries (sample=1)
-   # almost_total_vm_memory = “1G GPA Pages” * 1024 + (“2M GPA Pages” * 2) + ((“4K GPA Pages” + “Deposited pages”) / 256)
+   # almost_total_vm_memory = "1G GPA Pages" * 1024 + ("2M GPA Pages" * 2) + (("4K GPA Pages" + "Deposited pages") / 256)
    # 
    # the parameters for this "function" are
    # Value1GGPApages,Value2MGPApages,Value4KGPApages,DepositedPages,SPRINTF_SPEC
@@ -3055,7 +3113,7 @@ if ($data_errors) {
       }
       $plugin_output.=" You might have your username/password wrong or the user's access level is too low. ${extra_msg}Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041010/i) {
-      $plugin_output.=" The plugin is having trouble finding the required WMI Classes on the target host ($the_arguments{_host}). There can be multiple reasons for this (please go through them and check) including permissions problems (try using an admin login) or software that creates the class is not installed (eg if you are trying to checkiis but IIS is not installed). It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes the WMI service is not running, other times a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
+      $plugin_output.=" The plugin is having trouble finding the required WMI Classes on the target host ($the_arguments{_host}). There can be multiple reasons for this (please go through them and check) including permissions problems (try using an admin login) or software that creates the class is not installed (eg if you are trying to checkiis but IIS is not installed). It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions or your version of Windows does not even have the required WMI class). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes the WMI service is not running, other times a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x8007000e/i) { 
       $plugin_output.=" We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of services. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041003/i) { 
@@ -3122,33 +3180,43 @@ if ($#$specifications>=0) {
          my $row=0;
          foreach my $wmiquerydata (@{$$wmidata[$last_wmi_data_index]}) {
             $debug && print "-------- Looking at Row #$row " . Dumper($wmiquerydata);
-            my ($result,$perf,$display,$test_field)=parse_limits($clusion_spec,$wmiquerydata);
-            my $include_this_data=0; # the default position is to exclude the data, we change this to 1 when we want to keep the data
-            if ($result) {
-               $debug && print " --- Range Specification was met\n";
-               # criteria is triggered so we know that the data mets the range criteria
-               if ($include_mode) {
-                  # we are including data and this data met the requirement so we have to include it
-                  $include_this_data=1;
-               }
+            # the first check is to see if this data has already been exluded by some other exclusion
+            if ($$wmiquerydata{'_Exclude_Data'}) {
+               $debug && print "******** Data previously excluded by $$wmiquerydata{'_Exclude_Data'}\n";
             } else {
-               $debug && print " --- Range Specification was NOT met\n";
-               # criteria is not met
-               if (!$include_mode) { # ie if excluding then ....
-                  # we are excluding data and this one did not met the requirements for exclusion so include it
-                  $include_this_data=1;
+               my ($result,$perf,$display,$test_field)=parse_limits($clusion_spec,$wmiquerydata);
+               my $include_this_data=0; # the default position is to exclude the data, we change this to 1 when we want to keep the data
+               if ($result) {
+                  $debug && print " --- Range Specification was met\n";
+                  # criteria is triggered so we know that the data meets the range criteria
+                  if ($include_mode) {
+                     # we are including data and this data met the requirement so we have to include it
+                     $include_this_data=1;
+                  }
+               } else {
+                  $debug && print " --- Range Specification was NOT met\n";
+                  # criteria is not met
+                  if (!$include_mode) { # ie if excluding then ....
+                     # we are excluding data and this one did not met the requirements for exclusion so include it
+                     $include_this_data=1;
+                  }
                }
-            }
-                  
-            if ($include_this_data) {
-               $debug && print "******** Including this row of data\n";
-               push(@new_wmi_query_data,$wmiquerydata);
-               # we also have to keep the equivalent row from the first wmi query
-               push(@new_first_wmi_query_data,$$wmidata[0][$row]);
-               $inclusions_for_this_spec++;
-            } else {
-               $exclusions_for_this_spec++;
-               $debug && print "******** NOT including this row of data\n";
+                     
+               if ($include_this_data) {
+                  $debug && print "******** Marking row #$row as INCLUDED\n";
+                  $inclusions_for_this_spec++;
+                  if ($include_mode) {
+                     # flag that this data was included because it is in include mode and which inclusion spec included it
+                     $$wmiquerydata{'_Include_Data'}=$clusion_spec;
+                  }
+               } else {
+                  $exclusions_for_this_spec++;
+                  if (!$include_mode) {
+                     # flag that this data was excluded because it is in exclude mode and which exclusion spec excluded it
+                     $$wmiquerydata{'_Exclude_Data'}=$clusion_spec;
+                  }
+                  $debug && print "******** Marking row #$row as NOT included\n";
+               }
             }
             $row++;
          }
@@ -3157,6 +3225,35 @@ if ($#$specifications>=0) {
          $num_inclusions+=$inclusions_for_this_spec;
          $debug && print "-------- There were $inclusions_for_this_spec inclusions and $exclusions_for_this_spec exclusions for this specification\n";
       }
+   }
+   
+   # now we need to go through the WMI data and pull out all the ones that ended up being excluded or not included (since we could have had multiple includes or excludes)
+   $debug && print "Now checking all inclusions/exclusions for building the final list\n";
+   my $row=0;
+   foreach my $wmiquerydata (@{$$wmidata[$last_wmi_data_index]}) {
+      $debug && print "-------- Looking at Row #$row " . Dumper($wmiquerydata);
+      my $include_this_data=0;
+      if ($include_mode) {
+         # in include mode, only include items that are specifically included
+         if ($$wmiquerydata{'_Include_Data'}) {
+            $debug && print "******** Data included by $$wmiquerydata{'_Exclude_Data'}\n";
+            $include_this_data=1;
+         }
+      } elsif (!$include_mode) {
+         # in exclude mode, only exclude items that are specifically excluded
+         if ($$wmiquerydata{'_Exclude_Data'}) {
+            $debug && print "******** Data excluded by $$wmiquerydata{'_Exclude_Data'}\n";
+         } else {
+            $include_this_data=1;
+         }
+      }
+      if ($include_this_data) {
+         $debug && print "******** Including row #$row\n";
+         push(@new_wmi_query_data,$wmiquerydata);
+         # we also have to keep the equivalent row from the first wmi query
+         push(@new_first_wmi_query_data,$$wmidata[0][$row]);
+      }      
+      $row++;
    }
 
    check_for_and_fix_row_zero(\@new_wmi_query_data,\%{$$wmidata[$last_wmi_data_index][0]});
@@ -3196,6 +3293,8 @@ my ($new_data_array,$old_data_hash)=@_;
 # now check to make sure the zero row is still place and also update the _ItemCount field with a new value
 # we need to save this value since the "exists" check, while it does not create the hash entry still puts an array entry in there
 my $new_num_wmi_rows=$#{$new_data_array};
+$debug && print "NEW WMI Data is " . Dumper($new_data_array) . " with last index=$new_num_wmi_rows\n";
+
 if (!exists($$new_data_array[0]{'_ItemCount'})) {
    # the original Row 0 has been excluded
    # we can't actually just drop row 0 since it contains special data eg _ItemCount and maybe other fields
@@ -3643,15 +3742,22 @@ if ($the_arguments{'_arg1'} eq '') {
    # only need 1 WMI query when _arg1 not specified
    $num_samples=1; 
 }
-my ($data_errors,$last_wmi_data_index)=get_wmi_data($num_samples,'',
-   "select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,Frequency_Sys100NS,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfRawData_Tcpip_NetworkInterface",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+
+# default interface stats query for server 2012 and above
+my $interface_query='select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,Frequency_Sys100NS,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfRawData_Tcpip_NetworkAdapter';
+
+if ($the_arguments{'_arg2'} eq 'legacy') {
+   $interface_query='select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,Frequency_Sys100NS,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfRawData_Tcpip_NetworkInterface';
+}
+
+my ($data_errors,$last_wmi_data_index)=get_wmi_data($num_samples,'',$interface_query,'','',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 check_for_data_errors($data_errors);
 
 ## now join the mapping between mac address and the network data device name
 ## have to replace all the non alpha characters in both items to get a match
 ## we specify these joins as being able to use a state file since we expect them to be quite static
+$debug && print "Data Join on the Name to find the MAC address\n";
 my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('NetMacMap',\@collected_data,$last_wmi_data_index,'Name','\W','_','Description','\W','_',1,'',
    "select ipaddress,description,macaddress,ipsubnet,defaultipgateway,dhcpenabled,dhcpserver,dnsdomain,servicename from win32_networkadapterconfiguration where macaddress like '%:%'",
    '','',\@mac_mapping,\$the_arguments{'_delay'},undef,0);
@@ -3659,6 +3765,7 @@ my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('NetMacMap',\@c
 ## now join the mapping between mac address connection netconnectionid
 ## have to replace all the non alpha characters in both items to get a match
 ## we specify these joins as being able to use a state file since we expect them to be quite static
+$debug && print "Data Join on the MAC Address to find the NetConnectionID (Windows friendly name)\n";
 ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('NetNameMap',\@collected_data,$last_wmi_data_index,'MACAddress','',undef,'MACAddress','',undef,1,'',
    "select macaddress,netconnectionID from win32_networkadapter where netconnectionid like '%'",
    '','',\@netid_mapping,\$the_arguments{'_delay'},undef,0);
@@ -3681,7 +3788,7 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    $$row{'_StatusType'}='';
    $$row{'_Triggers'}='';
    
-   $debug && print "Looking for a match to $the_arguments{'_arg1'} in '$$row{'Name'}' or '$$row{'NetConnectionID'}' or '$$row{'IPAddress'}' or '$$row{'MACAddress'}'\n";
+   $debug && print "Looking for a match to the command line argument '$the_arguments{'_arg1'}' in Name:'$$row{'Name'}' or NetConnectionID:'$$row{'NetConnectionID'}' or IPAddress:'$$row{'IPAddress'}' or MACAddress:'$$row{'MACAddress'}'\n";
    # see if $the_arguments{'_arg1'} matches any of ipaddress,macaddress,netconnectionid or the original network adapter name from the Win32_PerfRawData_Tcpip_NetworkInterface query
    if (  $$row{'Name'}=~/$the_arguments{'_arg1'}/i ||
          $$row{'NetConnectionID'}=~/$the_arguments{'_arg1'}/i || 
@@ -3750,7 +3857,7 @@ if ($collected_data[$last_wmi_data_index][0]{'_NumInterfaces'}>0) {
    
    finish_program($overall_test_result);
 } else {
-   $plugin_output."No Network Interfaces specified. Valid Interface Names are:\n" . list_collected_values_from_all_rows(\@collected_data,['Name','NetConnectionID','IPAddress','MACAddress'],"\n",', ',0) . "\nSpecify the -a parameter with an adapter name. Use ' ' around the adapter name.\n";
+   $plugin_output.="No Network Interfaces specified. Valid Interface Names are:\n" . list_collected_values_from_all_rows(\@collected_data,['Name','NetConnectionID','IPAddress','MACAddress'],"\n",', ',0) . "\nSpecify the -a parameter with an adapter name. Use ' ' around the adapter name.\n";
    finish_program($ERRORS{'UNKNOWN'});
 
 }
@@ -5489,7 +5596,7 @@ for (my $query_number=$last_wmi_data_index;$query_number<=$last_wmi_data_index;$
             }
          }
       }
-      $debug && print "Looking for $base_value in Extra Data\n";
+      $debug && print "Looking for $base_value (of type $base_field) in Extra Data\n";
       my $extra_row=$extra_index{$base_value};
       if (defined($extra_row)) {
          $debug && print "Found Matching Data in Extra Row: $extra_row\n";

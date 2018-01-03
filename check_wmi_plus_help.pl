@@ -484,6 +484,7 @@ checknetwork
       specify exactly what you want. eg "LAN0" or "192.168.0.1" or "192.168.0" or "LAN0|LAN2" or "." or "08:00:27:85:CE:6D" or "08:00:27"
       To specify a network interface you can use either the Connection Name (as seen in Control Panel), IP Address (IPv4 or IPV6) or MAC Address. You can also use the name of the network adaptors as seen from WMI which is similar to what is seen in the output of the ipconfig/all command on Windows. However, it is not exactly the same and can be tricky since this uses a regular expression. Run without -a to show the interface
       names, IP Addresses, MAC Addresses. Typically you need to use '' around the adapter name when specifying.
+   ARG2  Set this to the string 'legacy' to query the older WMI class (Win32_PerfRawData_Tcpip_NetworkInterface) for obtaining network statistics. You may need to do this for Windows Server versions prior to Windows Server 2012.
    $default_help_text_delay
    WARN/CRIT  can be used as described below.
       $field_lists{'checknetwork'}
