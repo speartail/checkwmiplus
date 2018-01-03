@@ -44,3 +44,14 @@ $make_manpage_script="$base_dir/check_wmi_plus.makeman.sh"; # CHANGE THIS IF NEE
 
 # this is the directory where the manpage is stored when created, defaults to the same directory as the ini files
 $manpage_dir="$wmi_ini_dir"; # CHANGE THIS IF NEEDED
+
+# ---------------------- OTHER CONFIGURATION -------------------------
+
+# Disable the check of Perl Module versions
+# The module versions are checked because the are often the cause of the plugin not working correctly
+# If you want support you will need to reproduce the fault with the supported versions of the modules ie enable this check
+# Set to 1 to ignore the version check, Set to 0 to perform the check
+# Setting this to 1 has the same effect as the command line option  --IgnoreMyOutDatedPerlModuleVersions
+# Setting either this to 1 or the command line option will disable the check
+$ignore_my_outdated_perl_module_versions=0; # CHANGE THIS IF NEEDED
+

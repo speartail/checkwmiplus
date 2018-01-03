@@ -41,7 +41,7 @@ my $conf_file='/opt/nagios/bin/plugins/check_wmi_plus.conf';
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.52";
+my $VERSION="1.53";
 
 # we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
 use lib "/usr/lib/nagios/plugins";
@@ -49,6 +49,7 @@ use lib "/usr/lib/nagios/plugins";
 use strict;
 use Getopt::Long;
 use Scalar::Util qw(looks_like_number);
+use Number::Format qw(:subs);
 
 # command line option declarations
 my $opt_auth_file='';
@@ -114,6 +115,7 @@ my %good_module_versions=(
    'DateTime::VERSION',0.66,
    'Getopt::Long::VERSION',2.38,
    'Scalar::Util::VERSION',1.22,
+   'Number::Format::VERSION',1.73,
    'Data::Dumper::VERSION',2.125,
    'Config::IniFiles::VERSION',2.58,
    'Storable::VERSION',2.22
@@ -127,9 +129,13 @@ my $PROGNAME="check_wmi_plus";
 
 my $default_bytefactor=1024;
 
-# ---------------------- DEFAULT FILE LOCATIONS -------------------------
+
+
+# ================================== DEFAULT CONFIGURATION ================================
 # override these settings using the $conf_file (which is defined right near the top of this script)
-# I have everything installed in /opt/nagios/bin/plugins
+
+# ---------------------- DEFAULT FILE LOCATIONS -------------------------
+# Developed and tested with everything installed in /opt/nagios/bin/plugins
 
 # You might not even use this variable if you have different locations for everything
 our $base_dir='/opt/nagios/bin/plugins';
@@ -158,7 +164,20 @@ our $make_manpage_script="$base_dir/check_wmi_plus.makeman.sh";
 # this is the directory where the manpage is stored when created, defaults to the same directory as the ini files
 our $manpage_dir="$wmi_ini_dir";
 
-# -------------------- END DEFAULT FILE LOCATIONS -------------------------
+# ---------------------- OTHER CONFIGURATION -------------------------
+
+# Disable the check of Perl Module versions
+# The module versions are checked because the are often the cause of the plugin not working correctly
+# If you want support you will need to reproduce the fault with the supported versions of the modules ie enable this check
+# Set to 1 to ignore the version check, Set to 0 to perform the check
+# Setting this to 1 has the same effect as the command line option  --IgnoreMyOutDatedPerlModuleVersions
+# Setting either this to 1 or the command line option will disable the check
+our $ignore_my_outdated_perl_module_versions=0;
+
+# ============================= END OF DEFAULT CONFIGURATION ================================
+
+
+
 
 # try and open the conf file to get any user set variables
 # if it does not work, just ignore and carry on
@@ -166,8 +185,9 @@ our $conf_file_dir=$conf_file;
 $conf_file_dir=~s/^(.*)\/(.*?)$/$1/;
 # print "Conf File Dir: $conf_file_dir\n";
 if (-f "$conf_file") {
-   do "$conf_file" || die "Configuration File Error with $conf_file (mostly likely a syntax error)";
-   # print "Loaded Conf File $conf_file\n";
+   if (!defined(do "$conf_file")) {
+      die "Configuration File Error with $conf_file (mostly likely a syntax error)";
+   }
 }
 
 # do this use here since the user might have changed the directory we in the conf file
@@ -248,7 +268,7 @@ my %valid_test_fields = (
    checkfoldersize   => [ qw(_FolderSize _ItemCount) ],
    checkgeneric      => [ qw(FileControlBytesPersec FileControlOperationsPersec FileDataOperationsPersec FileReadBytesPersec FileReadOperationsPersec FileWriteBytesPersec FileWriteOperationsPersec) ],
    checkmem          => [ qw(_MemUsed% _MemFree% _MemUsed _MemFree _MemTotal) ],
-   checknetwork      => [ qw(CurrentBandwidth _PacketsSentPersec _PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors _BytesSentPersec _BytesReceivedPersec) ],
+   checknetwork      => [ qw(CurrentBandwidth _PacketsSentPersec _PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors _BytesSentPersec _BytesReceivedPersec _SendByteUtilisation _ReceiveByteUtilisation) ],
    checkpage         => [ qw(_Used% _Used _Free _Free% _PeakUsed% _PeakUsed _PeakFree _PeakFree% _Total) ], 
    checkprocess      => [ qw(_ItemCount _NumExcluded) ],
    checkservice      => [ qw(_NumBad _NumGood _NumExcluded _Total) ],
@@ -294,7 +314,7 @@ my %display_fields = (
    checkfoldersize   => [ '_DisplayMsg||~|~| - ||', '_arg1||Folder| |~|| is ', '_FolderSize|#B|~|~|. ||', '_ItemCount| files(s)|Found| |.||', '_FileList||~|~|~||' ], 
    checkgeneric      => [ '_DisplayMsg||~|~| - ||', 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ], 
    checkmem          => [ '_DisplayMsg||~|~| - ||', 'MemType||~|~|~||: ', '_MemTotal|#B|Total|: | - ||', '_MemUsed|#B|Used|: | ||', '_MemUsed%|%|~|~| - |(|)', '_MemFree|#B|Free|: | ||', '_MemFree%|%|~|~||(|)' ], 
-   checknetwork      => [ '_DisplayMsg||~|~| - ||', '_DisplayName||Interface:|~|||', 'IPAddress||IP Address:|~|||', 'MACAddress||MAC Address |~|||', 'CurrentBandwidth|#bit/s|Speed:|~|||', 'DHCPEnabled', '_BytesSentPersec|#B/sec|Byte Send Rate||||', '_BytesReceivedPersec|#B/sec|Byte Receive Rate||||', '_PacketsSentPersec|#packet/sec|Packet Send Rate||||', '_PacketsReceivedPersec|#packet/sec|Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
+   checknetwork      => [ '_DisplayMsg||~|~| - ||', '_DisplayName||Interface:|~|||', 'IPAddress||IP Address:|~|||', 'MACAddress||MAC Address |~|||', 'CurrentBandwidth|#bit/s|Speed:|~|||', 'DHCPEnabled', '_BytesSentPersec|#B/sec|Byte Send Rate|| (||', '_SendBytesUtilisation|%|Utilisation||), ||', '_BytesReceivedPersec|#B/sec|Byte Receive Rate||(||', '_ReceiveBytesUtilisation|%|Utilisation||) ||', '_PacketsSentPersec|#packet/sec|Packet Send Rate||||', '_PacketsReceivedPersec|#packet/sec|Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
    checkpage         => [ '_DisplayMsg||~|~| - ||', 'Name||~|~| ||', '_Total|#B|Total|: | - ||', '_Used|#B|Used|: | ||', '_Used%|%|~|~| - |(|)', '_Free|#B|Free|: | ||', '_Free%|%|~|~||(|)', '_PeakUsed|#B|Peak Used|: | ||', '_PeakUsed%|%|~|~| - |(|)', '_PeakFree|#B|Peak Free|: | ||', '_PeakFree%|%|~|~||(|)' ], 
    checkprocess      => [ '_DisplayMsg||~|~| - ||', '_ItemCount| Instance(s)|Found |~|~|| of "{_arg1}" running ', '_NumExcluded| excluded|~|~|~|(|). ', 'ProcessList||~|~|~||' ],
    checkservice      => [ '_DisplayMsg||~|~| - ||', '_Total| Services(s)|Found |~|||', '_NumGood| OK|~|~| and ||', '_NumBad| with problems |~|~|~||', '_NumExcluded| excluded|~|~|~|(|). ', '_ServiceList||~|~|~||' ],
@@ -322,7 +342,7 @@ my %performance_data_fields = (
    checkfoldersize   => [ '_FolderSize|bytes|{_arg1} Size', '_ItemCount||File Count' ],
    checkgeneric      => [ 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ],
    checkmem          => [ '_MemUsed|Bytes|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ], 
-   checknetwork      => [ '_BytesSentPersec||{_DisplayName} BytesSentPersec', '_BytesReceivedPersec||{_DisplayName} BytesReceivedPersec', '_PacketsSentPersec||{_DisplayName} PacketsSentPersec', '_PacketsReceivedPersec||{_DisplayName} PacketsReceivedPersec', 'OutputQueueLength||{_DisplayName} OutputQueueLength', 'PacketsReceivedErrors||{_DisplayName} PacketsReceivedErrors' ],
+   checknetwork      => [ '_BytesSentPersec||{_DisplayName} BytesSentPersec', '_SendBytesUtilisation|%|{_DisplayName} Send Utilisation', '_BytesReceivedPersec||{_DisplayName} BytesReceivedPersec', '_ReceiveBytesUtilisation|%|{_DisplayName} Receive Utilisation', '_PacketsSentPersec||{_DisplayName} PacketsSentPersec', '_PacketsReceivedPersec||{_DisplayName} PacketsReceivedPersec', 'OutputQueueLength||{_DisplayName} OutputQueueLength', 'PacketsReceivedErrors||{_DisplayName} PacketsReceivedErrors' ],
    checkpage         => [ '_Total|Bytes|{Name} Page File Size', '_Used|Bytes|{Name} Used', '_Used%|%|{Name} Utilisation', '_PeakUsed|Bytes|{Name} Peak Used', '_PeakUsed%|%|{Name} Peak Utilisation' ], 
    checkprocess      => [ '_ItemCount||Process Count', '_NumExcluded||Excluded Process Count' ],
    checkservice      => [ '_Total||Total Service Count', '_NumGood||Service Count OK State', '_NumBad||Service Count Problem State', '_NumExcluded||Excluded Service Count' ],
@@ -412,7 +432,7 @@ if ($opt_package) {
    print README $output;
    close(README);
    # a bit of hard coding here .....
-   $output=`cd $base_dir;cp check_wmi_plus.conf check_wmi_plus.conf.sample;tar czvf $tarfile --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus.README.txt check_wmi_plus.conf.sample check_wmi_plus_examples.sh check_wmi_plus.d `;
+   $output=`cd $base_dir;cp check_wmi_plus.conf check_wmi_plus.conf.sample;chown nagios:nagios check_wmi_plus.conf.sample;tar czvf $tarfile --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus.README.txt check_wmi_plus.conf.sample check_wmi_plus.d event_generic.pl`;
    print $output;
    print "Created $base_dir/$tarfile\n";
    $output=`cd $base_dir;rm check_wmi_plus.conf.sample`;
@@ -421,7 +441,11 @@ if ($opt_package) {
 
 # check module versions as they very often cause problems if older than developed with
 # unless ignored by command line option
-if (!$opt_ignore_versions) {
+if ($opt_ignore_versions || $ignore_my_outdated_perl_module_versions) {
+   # the user has to configure this so they get warned at least once if it is a problem
+   # ignore perl module version checks
+} else {
+   # check the versions
    my $versions_ok=check_module_versions(0);
    if (!$versions_ok) {
       exit $ERRORS{'UNKNOWN'};
@@ -636,7 +660,7 @@ foreach my $moduleversion (keys %good_module_versions) {
 }
 
 if (!$versions_ok || $force_show) {
-   $versions_ok || print "Warning - one or more of your Perl Modules are out of date and this may cause plugin problems. If you are having any problems with Check WMI Plus you must upgrade your Perl Modules before contacting support (since they'll just tell you to upgrade!). You can override this warning at your peril by using the --IgnoreMyOutDatedPerlModuleVersions command line option. Version Information on the next line.\n";
+   $versions_ok || print "Warning - one or more of your Perl Modules are out of date and this may cause plugin problems. If you are having any problems with Check WMI Plus you must upgrade your Perl Modules before contacting support (since they'll just tell you to upgrade!). You can override this warning at your peril by using the --IgnoreMyOutDatedPerlModuleVersions command line option or the \"\$ignore_my_outdated_perl_module_versions\" setting in the conf file ($conf_file). Version Information on the next line.\n";
    printf("%-19s %19s %7s %-10s\n",'MODULE_NAME','INSTALLED_VERSION','STATUS','DESIRED_VERSION');
    foreach my $moduleversion (keys %good_module_versions) {
       my $status='ok';
@@ -1195,14 +1219,14 @@ checkdrivesize
       $field_lists{'checkdrivesize'}.
 
 checkeventlog  
-   ARG1  Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer".
+   ARG1  Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer". You may also use a comma delimited list to specify multiple event logs. You can also specify event log names using the wildcard character % eg system,app%,%shell%.
       Default is system
-   ARG2  Severity Number, 2 = warning 1 = error. The plugin shows all severity levels less than and equal to the one chosen.
+   ARG2  Severity Number, 2 = warning 1 = error. Other levels you may wish to use include 3 = Information, 4 = Security Audit Success and 5 = Security Audit Failure. The plugin shows all severity levels less than and equal to the one chosen.
       Default is 1.
    ARG3  Number of past hours to check for events. Default is 1
    ARG4  Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
       ie use the eventdefault section settings from the ini file. The ini file contains regular expression based inclusion
-      and exclusion rules to accurately define the events you want to or don't want to see. See the event.ini file for details.
+      and exclusion rules to accurately define the events you want to or don't want to see. See the events.ini file for details.
    WARN/CRIT   can be used as described below.
       $field_lists{'checkeventlog'}.
 
@@ -1211,6 +1235,10 @@ checkeventlog
       
       -a System -3 24
       
+      to report all errors that got logged in the past 24 hours in any event log use:
+      
+      -a % -3 24
+
       to report all warnings and errors that got logged in the past 4 hours in the Application event log use:
       
       -a application -o 2 -3 4
@@ -1284,9 +1312,9 @@ checkpage
       inital size of the page file. The critical level is set to 80% of the maximum page file size.
       If set, it is used instead of any command line specification of warning/critical settings.
       Note: The separate WMI query to obtain the additional information required to use this setting only works if you have set a custom size for your page files. If they are set to "System Managed", this will not work. You can tell if an automatic warning/critical level has been set by examining the performance data for the "Used" value. In this example - "'E:/pagefile.sys Used'=41943040Bytes;104857600;167772160;" you can tell that the levels have been automatically set because there are 3 numeric values in the performance data - the last 2 are the warning and critical levels.
-   ARG2  drive letter page to check. If omitted a list of valid page files will be shown. If set to . all page files will be included.
+   ARG2  drive letter page to check. If omitted all page files will be included.
       To include multiple drives separate them with a |. This uses a regular expression so take care to
-      specify exactly what you want. eg "C:" or "C:|E:" or "."
+      specify exactly what you want. eg "C:" or "C:|E:". Make sure you use a : after each drive letter to match properly.
    ARG3  Set this to 1 to include information about the sum of all pages file on the entire system.
       If you set this you can also check warn/crit against the overall disk space.
       To show only the overall page file info, set ARG3 to 1 and set ARG2 to 1 (actually to any non-existant disk)
@@ -1422,14 +1450,22 @@ return $new_uptime_string;
 #-------------------------------------------------------------------------
 sub scaled_bytes {
 # pass a number
-# from http://www.perlmonks.org/?node_id=378538
-# very cool
-# modified a little to protect against uninitialised variables and to remove the byte unit 
 my ($incoming)=@_;
 if ($incoming ne '' && looks_like_number($incoming)) {
-   (sort { length $a <=> length $b }
-   map { sprintf '%.3f%s', $incoming/$actual_bytefactor**$_->[1], $_->[0] }
-   [""=>0],[K=>1],[M=>2],[G=>3],[T=>4],[P=>5],[E=>6])[0]
+   # new code to now use Number::Format - instead of trying to do it ourselves
+   # this is about half the speed BUT looks nicer an we don't use it that much to make a speed difference
+   my %options=(
+      precision => 3,         # hard coded precision - should be ok
+      base      => $actual_bytefactor, 
+   );
+   return format_bytes($incoming,%options);
+
+   ## from http://www.perlmonks.org/?node_id=378538
+   ## very cool
+   ## modified a little to protect against uninitialised variables and to remove the byte unit 
+   #(sort { length $a <=> length $b }
+   #map { sprintf '%.3f%s', $incoming/$actual_bytefactor**$_->[1], $_->[0] }
+   #[""=>0],[K=>1],[M=>2],[G=>3],[T=>4],[P=>5],[E=>6])[0]
 } else {
    return $incoming;
 }
@@ -1713,6 +1749,8 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
          # now, if $column_name_regex is specified then we have to use the regex to look for the column names
          # else we just look for the next line and split it on |
          my $got_header=0;
+         my $last_header_field_number=-1;
+         my $header_row_content='';
          my @column_names=();
          # doing this check each time helps validate the results
          if ($column_name_regex) {
@@ -1737,7 +1775,8 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   }
                   $j++;
                }
-               $debug && print "\n";
+               $last_header_field_number=$j-1;
+               $debug && print " (last index=$last_header_field_number cols)\n";
                # increment the ok counter
                $$results[0][0]{'_ChecksOK'}++;
             }
@@ -1745,9 +1784,11 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
             # we just do a regex that grabs the next line of output
             if ($output=~/(.*?)\n/sg) {
                $got_header=1;
+               $header_row_content=$1;
                # we just use split to break out the column titles
                @column_names=split(/$wmic_split_delimiter/,$1);
-               $debug && print "COLUMNS:$1\n";
+               $last_header_field_number=$#column_names;
+               $debug && print "COLUMNS(last index=$last_header_field_number):$1\n";
                $$results[0][0]{'_ChecksOK'}++;
             }
          }
@@ -1774,6 +1815,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   foreach my $field (split(',',$value_regex)) {
                      $keep_certain_fields{$field}=1;
                   }
+                  # adjust the number of 
                   $debug && print "KEEP ONLY THESE FIELDS=$value_regex\n";
                } else {
                   # we assume that this is a regex
@@ -1789,31 +1831,42 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
             my @field_data;
             while ($output=~/$field_finding_regex/sg) {
                # now we have matched a result row, so break it up into fields
+               my $row_data_valid=1;
+               my $row_data=$1; # this is the entire string matched (only works if $use_split=1)
+               $debug && print "\nLooking at Data Row: $&";
                if ($use_split) {
-                  @field_data=split(/$wmic_split_delimiter/,$1);
-                  my $header_field_number=0;
-                  my $data_field_number=1; # these ones start from 1 since it makes it easier for the user to define - take care
-                  $debug && print "FIELDS:";
-                  foreach my $field (@field_data) {
-                     my $use_field=1;
-                     if ($value_regex && ! exists($keep_certain_fields{$data_field_number})) {
-                        $debug && print "Drop Field #$data_field_number=$field\n";
-                        $use_field=0;
+                  @field_data=split(/$wmic_split_delimiter/,$row_data);
+                  
+                  # check that the row data looks valid
+                  # to be valid
+                  # 1) the row should have the same number of fields as the header row (there have been reports that the CLASS: line repeats throughout the content
+                  # 2) the row should not be the same as the header row (there have been reports that the header row sometimes repeats throughout the content)
+                  # If we are using $value_regex to find the fields then all that goes out the window and we have to assume it is ok
+                  if ( ($#field_data==$last_header_field_number && $row_data ne $header_row_content) || $value_regex) {
+                     my $header_field_number=0;
+                     my $data_field_number=1; # these ones start from 1 since it makes it easier for the user to define - take care
+                     $debug && print "FIELDS (via Split):";
+                     foreach my $field (@field_data) {
+                        my $use_field=1;
+                        if ($value_regex && ! exists($keep_certain_fields{$data_field_number})) {
+                           $debug && print "Drop Field #$data_field_number=$field\n";
+                           $use_field=0;
+                        }
+                        if ($use_field) {
+                           $debug && print "COLNAME=$column_names[$header_field_number],FIELD=$field\n";
+                           # If you got the regex wrong or some fields come back with | in them you will get 
+                           # "Use of uninitialized value within @column_names in hash element" error when using $column_names[$header_field_number]
+                           # hence use $column_names[$header_field_number]||''
+                           $$results[$i][$found]{$column_names[$header_field_number]||''}=$field;
+                           # only increment the header field number when we use it 
+                           $header_field_number++;
+                        }
+                        # always increment the data field number
+                        $data_field_number++;
                      }
-                     if ($use_field) {
-                        $debug && print "COLNAME=$column_names[$header_field_number],FIELD=$field\n";
-                        # If you got the regex wrong or some fields come back with | in them you will get 
-                        # "Use of uninitialized value within @column_names in hash element" error when using $column_names[$header_field_number]
-                        # hence use $column_names[$header_field_number]||''
-                        $$results[$i][$found]{$column_names[$header_field_number]||''}=$field;
-                        # only increment the header field number when we use it 
-                        $header_field_number++;
-                     }
-                     # always increment the data field number
-                     $data_field_number++;
+                  } else {
+                     $row_data_valid=0;
                   }
-                  $debug && print "\n";
-                  $debug && print "Row Data Found OK\n";
                } else {
                   my $j=0;
                   #------------------------------------------------------
@@ -1822,35 +1875,39 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   # hopefully putting these to zero if they do not have any value will be ok, need a way to tell if $1 is '' or 0 really
                   @hardcoded_field_list=( $1||0,$2||0,$3||0,$4||0,$5||0,$6||0,$7||0,$8||0,$9||0 );
                   #------------------------------------------------------
-                  $debug && print "FIELDS:";
+                  $debug && print "FIELDS (via Hardcoding):";
                   foreach my $regex_field (@hardcoded_field_list) {
                      $debug && print "$regex_field, ";
                      if ($regex_field ne '') {
-                        # If you ggot the regex wrong or some fields come back with | in them you will get 
+                        # If you got the regex wrong or some fields come back with | in them you will get 
                         # "Use of uninitialized value within @column_names in hash element" error when using $column_names[$j]
                         # hence use $column_names[$j]||''
                         $$results[$i][$found]{$column_names[$j]||''}=$regex_field;
                      }
                      $j++;
                   }
+               }
+               
+               # only process and count as found if the row data is valid
+               if ($row_data_valid) {
                   $debug && print "\n";
                   $debug && print "Row Data Found OK\n";
+                  # provide Sums if the parameter is defined
+                  foreach my $field_name (@{$provide_sums}) {
+                     # we have to sum up all the fields named $field_name
+                     # we can assume that they are numbers
+                     # and we also assume that they are valid for this WMI query! ie that the programmer got it right!
+                     # this first sum, sums up all the $field_name across all the queries for the Row Number $i
+                     $debug && print "Summing for FIELD:\"$field_name\"\n";
+                     $$results[0][$found]{"_QuerySum_$field_name"}+=$$results[$i][$found]{$field_name};
+                     # this sum, sums up all the $field_names (columns) within a single query - ie where multiple rows are returned
+                     $$results[$i][0]{"_ColSum_$field_name"}+=$$results[$i][$found]{$field_name};
+                  }
+                  # increment the results counter for this query
+                  $found++;
+               } else {
+                  $debug && print "Probably an invalid row because $#field_data==$last_header_field_number && $row_data ne $header_row_content\n";
                }
-               
-               # provide Sums if the parameter is defined
-               foreach my $field_name (@{$provide_sums}) {
-                  # we have to sum up all the fields named $field_name
-                  # we can assume that they are numbers
-                  # and we also assume that they are valid for this WMI query! ie that the programmer got it right!
-                  # this first sum, sums up all the $field_name across all the queries for the Row Number $i
-                  $debug && print "Summing for FIELD:\"$field_name\"\n";
-                  $$results[0][$found]{"_QuerySum_$field_name"}+=$$results[$i][$found]{$field_name};
-                  # this sum, sums up all the $field_names (columns) within a single query - ie where multiple rows are returned
-                  $$results[$i][0]{"_ColSum_$field_name"}+=$$results[$i][$found]{$field_name};
-               }
-               # increment the results counter for this query
-               $found++;         
-               
             }
             # record the number of rows found for this query
             $$results[$i][0]{'_ItemCount'}=$found;
@@ -2463,13 +2520,16 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    my @parameter=split(',',$function_parameters);
    if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]}) && looks_like_number($$wmidata[$query_index][$which_row]{$parameter[1]})) {
       $debug && print "Core Calc: 100 * ($$wmidata[$query_index][$which_row]{$parameter[0]} / $$wmidata[$query_index][$which_row]{$parameter[1]}) = ";
-      $final_result=100 * ($$wmidata[$query_index][$which_row]{$parameter[0]} / $$wmidata[$query_index][$which_row]{$parameter[1]});
-      $debug && print " $final_result\n";
-      if ($parameter[3]) {
-         $final_result=$parameter[3]-$final_result;
-      }
-      if ($parameter[2]) {
-         $final_result=sprintf($parameter[2],$final_result);
+      # protect against divide by zero - if you get one you will get a CALC_FAIL result
+      if ($$wmidata[$query_index][$which_row]{$parameter[1]} != 0) {
+         $final_result=100 * ($$wmidata[$query_index][$which_row]{$parameter[0]} / $$wmidata[$query_index][$which_row]{$parameter[1]});
+         $debug && print " $final_result\n";
+         if ($parameter[3]) {
+            $final_result=$parameter[3]-$final_result;
+         }
+         if ($parameter[2]) {
+            $final_result=sprintf($parameter[2],$final_result);
+         }
       }
    }
    $debug && print "   Setting $newfield to $final_result\n";
@@ -2832,6 +2892,8 @@ if ($data_errors) {
       print " The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Is $the_arguments{_host} the correct hostname?. The host might even by up but just too busy. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_HOST_UNREACHABLE/i) {
       print " The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Looks like a valid name/IP Address. $the_arguments{_host} is probably not even pingable. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/NT status.*?c00000c4/i) {
+      print " This error has been reported when your DNS lookup configuration is not quite right. $the_arguments{_host} might be using a FQDN and/or you have no 'search' setting in your /etc/resolv.conf file. Wmic error text on the next line.\n";
    } else {
       print " The error text from wmic is: ";
    }
@@ -3415,6 +3477,20 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
       calc_new_field('_BytesSentPersec','PERF_COUNTER_COUNTER','BytesSentPersec,%.0f',\@collected_data,$last_wmi_data_index,$i);
       calc_new_field('_PacketsReceivedPersec','PERF_COUNTER_COUNTER','PacketsReceivedPersec,%.0f',\@collected_data,$last_wmi_data_index,$i);
       calc_new_field('_PacketsSentPersec','PERF_COUNTER_COUNTER','PacketsSentPersec,%.0f',\@collected_data,$last_wmi_data_index,$i);
+      calc_new_field('_ReceiveBytesUtilisation','percent','_BytesReceivedPersec,CurrentBandwidth,%.2f',\@collected_data,$last_wmi_data_index,$i);
+      calc_new_field('_SendBytesUtilisation','percent','_BytesSentPersec,CurrentBandwidth,%.2f',\@collected_data,$last_wmi_data_index,$i);
+
+   # the parameters for this "function" are
+   # SOURCEFIELD1,SOURCEFIELD2,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD1 [0] is a WMI field name which contains some number
+   # SOURCEFIELD2 [1] is a WMI field name which contains some number
+   # SPRINTF_SPEC [2] - a format specification passed directly to sprintf to format the result (can leave blank)
+   # INVERT [3] take the resulting value away from this number. Useful in the following example eg set this value to 100 to show busy percentage where counter value is an idle percentage.
+   # Formula is 100 * SOURCEFIELD1/SOURCEFIELD2
+   #
+
+
       
       # store the test result so we can access it for an overall test result
       $$row{'_TestResult'}=test_limits($opt_warn,$opt_critical,$row,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
@@ -3601,7 +3677,7 @@ return %lookup_results;
 #}
 #-------------------------------------------------------------------------
 sub checkmem {
-# note that for this check WMI returns data in kiobytes so we have to multiply it up to get bytes before using scaled_bytes
+# note that for this check WMI returns data in kilobytes so we have to multiply it up to get bytes before using scaled_bytes
 
 my @collected_data;
 my $data_errors='';
@@ -3696,6 +3772,12 @@ if ($the_arguments{'_arg1'}=~/auto/) {
       '','',\@page_size_mapping,\$the_arguments{'_delay'},undef,0);
 }
 
+if ($the_arguments{'_arg2'} eq '') {
+   # no page file specified
+   # we will use . to include all page files by default
+   $the_arguments{'_arg2'}='.';
+}
+
 my $results_text='';
 my $result_code=$ERRORS{'UNKNOWN'};
 my $performance_data='';
@@ -3727,7 +3809,6 @@ if ($the_arguments{'_arg3'}) {
 # now loop through the results, showing the ones requested
 foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
 
-   # if $the_arguments{'_arg2'} is left out it will be blank and will match nothing
    if ( $$row{'Name'}=~/$the_arguments{'_arg2'}/i || ($$row{'Name'} eq $alldisk_identifier && $the_arguments{'_arg3'}) ) {
       # include this drive in the results
 
@@ -4614,6 +4695,9 @@ sub checkeventlog {
 my %severity_level=(
    1  => "Error",
    2  => "Warning",
+   3  => "Information",
+   4  => "Security Audit Success",
+   5  => "Security Audit Failure",
 );   
 
 # set default values if not specified
@@ -4622,6 +4706,22 @@ my %severity_level=(
 if (!$the_arguments{'_arg1'}) {
    $the_arguments{'_arg1'}='System';
 }
+
+# arg1 can be a comma delimited list of logfile names eg system,application or just system
+# it can also include % in the logfile name 
+# build up the WMI query to include one or more logfile specifications
+my @logfile_list=split(/,/,$the_arguments{'_arg1'});
+my $logfile_wherebit='';
+foreach my $logfile (@logfile_list) {
+   # if the $logfile includes a % then we use a like clause otherwise we just use =
+   my $operator='=';
+   if ($logfile=~/%/) {
+      $operator=" LIKE ";
+   }
+   $logfile_wherebit.="Logfile$operator\"$logfile\" OR ";
+}
+# remove the last " OR " as it will not be needed
+$logfile_wherebit=~s/ OR $//;
 
 # severity level
 if (!exists($severity_level{$the_arguments{'_arg2'}})) {
@@ -4649,7 +4749,7 @@ my @collected_data;
 #Logfile|Message|RecordNumber|SourceName|TimeGenerated|Type
 #System|Printer 5D PDF Creator (from MATTHEW) was deleted.|101949|Print|20110521153921.000000+600|warning
 my ($data_errors,$last_wmi_data_index)=get_multiple_wmi_samples(1,'',
-   "Select EventIdentifier,Type,LogFile,SourceName,Message,TimeGenerated from Win32_NTLogEvent where Logfile=\"$the_arguments{'_arg1'}\" and EventType<=$the_arguments{'_arg2'} and EventType>0 and $where_time_part",
+   "Select EventIdentifier,Type,LogFile,SourceName,Message,TimeGenerated from Win32_NTLogEvent where ( $logfile_wherebit ) and EventType<=$the_arguments{'_arg2'} and EventType>0 and $where_time_part",
    '','(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\n',\@collected_data,\$the_arguments{'_delay'},undef,0);
 
 check_for_data_errors($data_errors);

@@ -1,4 +1,4 @@
-check_wmi_plus v1.52
+check_wmi_plus v1.53
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -240,14 +240,14 @@ checkdrivesize
       Valid Warning/Critical Fields are: _Used% (Default), _UsedGB, _Free%, _FreeGB.
 
 checkeventlog  
-   ARG1  Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer".
+   ARG1  Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer". You may also use a comma delimited list to specify multiple event logs. You can also specify event log names using the wildcard character % eg system,app%,%shell%.
       Default is system
-   ARG2  Severity Number, 2 = warning 1 = error. The plugin shows all severity levels less than and equal to the one chosen.
+   ARG2  Severity Number, 2 = warning 1 = error. Other levels you may wish to use include 3 = Information, 4 = Security Audit Success and 5 = Security Audit Failure. The plugin shows all severity levels less than and equal to the one chosen.
       Default is 1.
    ARG3  Number of past hours to check for events. Default is 1
    ARG4  Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
       ie use the eventdefault section settings from the ini file. The ini file contains regular expression based inclusion
-      and exclusion rules to accurately define the events you want to or don't want to see. See the event.ini file for details.
+      and exclusion rules to accurately define the events you want to or don't want to see. See the events.ini file for details.
    WARN/CRIT   can be used as described below.
       The only valid Warning/Critical Field is _ItemCount, so you don't even need to specify it!.
 
@@ -256,6 +256,10 @@ checkeventlog
       
       -a System -3 24
       
+      to report all errors that got logged in the past 24 hours in any event log use:
+      
+      -a % -3 24
+
       to report all warnings and errors that got logged in the past 4 hours in the Application event log use:
       
       -a application -o 2 -3 4
@@ -316,7 +320,7 @@ checknetwork
       names, IP Addresses, MAC Addresses. Typically you need to use '' around the adapter name when specifying.
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate.
    WARN/CRIT  can be used as described below.
-      Valid Warning/Critical Fields are: CurrentBandwidth (Default), _PacketsSentPersec, _PacketsReceivedPersec, OutputQueueLength, PacketsReceivedErrors, _BytesSentPersec, _BytesReceivedPersec
+      Valid Warning/Critical Fields are: CurrentBandwidth (Default), _PacketsSentPersec, _PacketsReceivedPersec, OutputQueueLength, PacketsReceivedErrors, _BytesSentPersec, _BytesReceivedPersec, _SendByteUtilisation, _ReceiveByteUtilisation
    BYTEFACTOR  defaults to 1000 for this mode. You can override this if you wish.
 
    Note:  
@@ -329,9 +333,9 @@ checkpage
       inital size of the page file. The critical level is set to 80% of the maximum page file size.
       If set, it is used instead of any command line specification of warning/critical settings.
       Note: The separate WMI query to obtain the additional information required to use this setting only works if you have set a custom size for your page files. If they are set to "System Managed", this will not work. You can tell if an automatic warning/critical level has been set by examining the performance data for the "Used" value. In this example - "'E:/pagefile.sys Used'=41943040Bytes;104857600;167772160;" you can tell that the levels have been automatically set because there are 3 numeric values in the performance data - the last 2 are the warning and critical levels.
-   ARG2  drive letter page to check. If omitted a list of valid page files will be shown. If set to . all page files will be included.
+   ARG2  drive letter page to check. If omitted all page files will be included.
       To include multiple drives separate them with a |. This uses a regular expression so take care to
-      specify exactly what you want. eg "C:" or "C:|E:" or "."
+      specify exactly what you want. eg "C:" or "C:|E:". Make sure you use a : after each drive letter to match properly.
    ARG3  Set this to 1 to include information about the sum of all pages file on the entire system.
       If you set this you can also check warn/crit against the overall disk space.
       To show only the overall page file info, set ARG3 to 1 and set ARG2 to 1 (actually to any non-existant disk)
@@ -701,7 +705,7 @@ INI FILE HELP SUMMARY
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _BytesPrintedPersec (Default), JobErrors, Jobs, JobsSpooling, NotReadyErrors, OutofPaperErrors, TotalJobsPrinted, TotalPagesPrinted
 
  checkprint, test (-m checkprint -s test)  
-   Demo check for join= and qoinquery= settings.
+   Demo check for join= and joinquery= settings.
    Grabs the same information as checkprinter spooler but adds a couple of extra fields from another WMI Class. 
    ARG1  The printer queue name to view stats for. Use _Total for the total stats for all print queues.
    Use % for wildcards. The printer queue name can be seen in the Device and Printer screen
