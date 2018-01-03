@@ -1,8 +1,8 @@
-check_wmi_plus v1.44
+check_wmi_plus v1.45
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
-Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-t TIMEOUT] [-y DELAY] [-x NODATAEXIT] [-n] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] 
+Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-t TIMEOUT] [-y DELAY] [-x NODATAEXIT] [-n] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [-v OSVERSION]
 
 where 
 BYTEFACTOR is either 1000 or 1024 and is used for conversion units eg bytes to GB. Default is 1024.
@@ -21,8 +21,36 @@ INIDIR is the full path of an ini directory to use. The plugin reads files endin
 NODATAEXIT is the plugin result if the WMI Query returns no data. Ignored if -n is set.
       Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown.
       Only used for some checks. All checks from the ini file can use this.
+OSVERSION is used for some MODEs only, where we need to do something slightly different to accomodate different Windows versions.
+   It is documented with each mode. Valid versions are: 2000. More will be added as required.
+
+Keeping State
+-------------
+This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc.
+
+Checks like this take 2 samples of WMI values (with a DELAY in between) and then calculate a result by differencing the values.
+By default, the plugin will "keepstate", which means that 1 WMI sample will be collected each time the plugin runs and it will
+calculate the difference using the values from the previous plugin run. For something like checkcpu, this means that the plugin
+gives you an average CPU utilisation between runs of the plugin. Even if you are 0% utilisation each time the plugin runs but
+100% in between, checkcpu will still report a very high utilisation percentage. This makes for a very accurate plugin result. 
+Another benefit of keeping state is that it results in fewer WMI queries and the plugin runs faster. If you disable keeping state,
+then, for these types of checks, the plugin reverts to taking 2 WMI samples with a DELAY each time it runs and works out the
+result then and there. This means that, for example, any CPU activity that happens between plugin runs is never detected. 
+There are some specific state keeping options:
+--nokeepstate disables the default mode of keeping state between plugin runs.
+--keepexpiry KEXPIRY where KEXPIRY is the number of seconds after which the plugin assumes that the previously collected data
+   has expired. The default is 3600 sec. You should run your plugin more frequently than this value or set
+   KEXPIRY higher.
+--keepid KID where KID is a unique identifier. This is normally not needed. In order to keep state between plugin runs, the data
+   is written to a file. In order to stop collisions between different plugin runs, and hence incorrect calculations,  the filename
+   is unique based on the checkmode, hostname, arguments passed etc. If for some reason these are not sufficient and you are
+   experiencing collisions, you can add a unique KID to each plugin check to ensure uniqueness.
+The files used to keep state are stored in /tmp. The DELAY setting is not applicable when keeping state is used.
+If you are "keeping state" then one of the first things shown in the plugin output is the sample period.
 
 
+Ini File Configured
+-------------------
 There is an ini file/dir configured. These contain more checks.
 --inihelp on its own shows a one line summary of all MODES/SUBMODES contained within the ini files.
 --inihelp specified with a MODE/SUBMODE shows the help just for that mode.
@@ -33,7 +61,7 @@ MODE=checkcpu
    Some CPU checks just take whatever WMI or SNMP gives them from the precalculated values. We don't.
    We use WMI Raw counters to calculate values over a given timeperiod. 
    This is much more accurate than taking Formatted WMI values.
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
    WARN/CRIT can be used as described below.
@@ -137,7 +165,7 @@ MODE=checknetwork
       ipconfig/all command on Windows. However, its not exactly the same. Run without -a to list the adapter
       names according to WMI. Typically you need to use '' around the adapter name when specifying.
       eg -a 'Intel[R] PRO_1000 T Server Adapter _2 - Packet Scheduler Miniport'
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
    WARN/CRIT can be used as described below.
@@ -158,13 +186,18 @@ MODE=checkpage
 
 MODE=checkprocess
 -----------------
-   SUBMODE: Set this to Name or Commandline to determine if ARG1 matches against just the process name (Default) or 
-      the commplete Command line used to run the process.
-   ARG1: A regular expression to match against the process name or complete command line. Use . alone to count all processes.
-         Typically the process command line is made up of DRIVE:PATH\PROCESSNAME PARAMETERS
+   SUBMODE: Set this to Name, ExecutablePath, or Commandline to determine if ARG1 matches against just the process name (Default),
+      the full path of the executable file, or the complete command line used to run the process.
+   ARG1: A regular expression to match against the process name, executable path or complete command line. Use . alone to count
+      all processes. Typically the process 
+           - Executable Path is like DRIVE:PATH/PROCESSNAME eg C:/WINDOWS/system32/svchost.exe,
+           - Command Line is like DRIVE:PATH/PROCESSNAME PARAMETERS eg C:/WINDOWS/system32/svchost.exe -k LocalService
          Use '/' (forward slash) instead of '\' (backslash). eg "C:/Windows" or "C:/windows/system32"
          Note: Any '/' in your regular expression will get converted to '\\'.
-   ARG2: Set this to 'Name' (Default) or 'Commandline' to display the process names or the whole command line.
+   ARG2: Set this to 'Name' (Default), Executablepath or 'Commandline' to display the process names, executablepath or the 
+      whole command line.
+   For SUBMODE and ARG2 you only need to specify the minimum required to make it unique. Any of the following will work
+   -s e, -s exe, -s c, -s com, -o e, -o exe, -o c, -o com
    WARN/CRIT can be used as described below.
       The only valid Warning/Critical Field is _ItemCount, so you don't even need to specify it!
    
@@ -178,7 +211,7 @@ MODE=checkservice
 MODE=checkuptime
 ----------------
    WARN/CRIT can be used as described below.
-      The only valid Warning/Critical Field is SystemUpTime, so you don't even need to specify it!
+      The only valid Warning/Critical Field is _UptimeSec, so you don't even need to specify it!
       The warning/critical values should be specified in seconds. However you can use the time multipliers
       (wk, yr, hr, sec, mth, min, day) to make it easier to use 
       eg instead of putting -w 1800 you can use -w 30min
@@ -265,12 +298,14 @@ MODE=checkio, SUBMODE=logical
    This is much more accurate than taking Formatted WMI values.
    ARG1: Name of the logical Windows drive to check eg C:. Use % for Wilcard.
       Use _Total to check all drives combined.
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
       
    Note that some of the PercentDisk values seem to give incorrect values. Use with caution.
    This check can return data for multiple drives in a single check.
+
+   Valid Warning/Critical Fields are: _PercentIdleTime, _PercentBusyTime, _PercentDiskTime, _PercentDiskReadTime, _PercentDiskWriteTime, _DiskReadBytesPersec, _DiskReadsPersec, _DiskWriteBytesPersec, _DiskWritesPersec, CurrentDiskQueueLength, _AvgDiskQueueLength, _AvgDiskReadQueueLength, _AvgDiskWriteQueueLength
 
 MODE=checkio, SUBMODE=physical
 ==============================
@@ -279,12 +314,14 @@ MODE=checkio, SUBMODE=physical
    This is much more accurate than taking Formatted WMI values.
    ARG1: Name of the logical Windows drive to check eg C: Use % for Wilcard.
       Use _Total to check all drives combined.
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
       
    Note that some of the PercentDisk values seem to give incorrect values. Use with caution.
    This check can return data for multiple drives in a single check.
+
+   Valid Warning/Critical Fields are: _PercentIdleTime, _PercentBusyTime, _PercentDiskTime, _PercentDiskReadTime, _PercentDiskWriteTime, _DiskReadBytesPersec, _DiskReadsPersec, _DiskWriteBytesPersec, _DiskWritesPersec, CurrentDiskQueueLength, _AvgDiskQueueLength, _AvgDiskReadQueueLength, _AvgDiskWriteQueueLength
 
 MODE=checkio, SUBMODE=old_logical
 =================================
@@ -292,11 +329,15 @@ MODE=checkio, SUBMODE=old_logical
    ARG1: Name of the logical Windows drive to check eg C:
       Use _Total to check all drives combined.
 
+   Valid Warning/Critical Fields are: PercentDiskTime, PercentIdleTime, PercentDiskReadTime, PercentDiskWriteTime, DiskReadBytesPersec, DiskReadsPersec, DiskWriteBytesPersec, DiskWritesPersec, CurrentDiskQueueLength, AvgDiskQueueLength, AvgDiskReadQueueLength, AvgDiskWriteQueueLength
+
 MODE=checkio, SUBMODE=old_physical
 ==================================
    Check physical disk IO. Superseeded by checkio physical.
    ARG1: Name of the physical Windows drive to check eg C: 
       Use _Total to check all drives combined.
+
+   Valid Warning/Critical Fields are: PercentDiskTime, PercentIdleTime, PercentDiskReadTime, PercentDiskWriteTime, DiskReadBytesPersec, DiskReadsPersec, DiskWriteBytesPersec, DiskWritesPersec, CurrentDiskQueueLength, AvgDiskQueueLength, AvgDiskReadQueueLength, AvgDiskWriteQueueLength
 
 MODE=checkproc, SUBMODE=cmdline
 ===============================
@@ -304,6 +345,8 @@ MODE=checkproc, SUBMODE=cmdline
    ARG1: The exact command line to search for. Use / instead of \\.
       e.g. C:/WINDOWS/system32/services.exe
    Use -n and/or NODATAEXIT settings to control what happens if no matching process is found
+
+   Valid Warning/Critical Fields are: _ItemCount
 
 MODE=checkproc, SUBMODE=memory
 ===============================
@@ -316,56 +359,77 @@ MODE=checkproc, SUBMODE=memory
       To view all processes set ARG1 to "%" and the full process list will be included in the plugin output.
    Use -n and/or NODATAEXIT settings to control what happens if no matching process is found
 
-MODE=checkts, SUBMODE=showsessions
-==============================
+   Valid Warning/Critical Fields are: _ItemCount, _ColSum_PrivateBytes, _ColSum_WorkingSet, _ColSum_VirtualBytes
+
+MODE=checkts, SUBMODE=show
+==========================
    Show current Terminal Services Session names. Use this check, normally from the command line, to list the 
    curent session names. Session names are then used in other checkts checks.
 
 MODE=checkts, SUBMODE=sessions
 ==============================
    Check Terminal Services Sessions.
+   Tested for Windows Server 2008.
+
+   Valid Warning/Critical Fields are: ActiveSessions, InactiveSessions, TotalSessions
+
+MODE=checkts, SUBMODE=sessions
+==============================
+   Check Terminal Services Sessions.
+   Tested for Windows 2003, Windows XP.
+
+   Valid Warning/Critical Fields are: ActiveSessions, InactiveSessions, TotalSessions
 
 MODE=checkts, SUBMODE=sessioninfo
 =================================
    Check Terminal Services Session Info for specific sessions.
    ARG1: Name of the TS Session eg console
       Note: Not tested on a real terminal services server - you might need to play with this to get what you need.
-         Not quite sure what the session names really look like except for "console".
-         Please post notes back to www.edcint.co.nz/checkwmiplus to help others. Thanks
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+      You can find the session names using the check MODE=checkts SUBMODE=show
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
+
+   Valid Warning/Critical Fields are: _InputBytes, _InputCompressedBytes, InputErrors, InputTimeouts, _OutputBytes, _OutputCompressedBytes, OutputErrors, OutputTimeouts, _PercentProcessorTime, PrivateBytes, ThreadCount, _TotalBytes, TotalErrors, TotalTimeouts
 
 MODE=checkeachcpu
 =================
    Get CPU performance (like checkcpu) but provide information for each CPU. Cores are seen as CPUs. 
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
+
+   Valid Warning/Critical Fields are: _AvgCPU
 
 MODE=checkdns, SUBMODE=stats
 ============================
    Checks various stats for Microsoft Windows Server running as a DNS Server
    Tested for Windows Server 2008 R2. Only tested on a low volume server.
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
+
+   Valid Warning/Critical Fields are: CachingMemory, DatabaseNodeMemory, DynamicUpdateReceived, _DynamicUpdateReceivedPersec, RecursiveQueries, _RecursiveQueriesPersec, RecursiveQueryFailure, _RecursiveTimeOutPersec, TotalQueryReceived, _TotalQueryReceivedPersec, TCPQueryReceived, _TCPQueryReceivedPersec, UDPQueryReceived, _UDPQueryReceivedPersec, WINSLookupReceived, _WINSLookupReceivedPersec
 
 MODE=checkdhcp, SUBMODE=stats
 =============================
    Checks various stats for Microsoft Windows Server running as an IPv4 DHCP Server
    Tested for Windows Server 2008 R2. Only tested on a low volume server.
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
+
+   Valid Warning/Critical Fields are: _AcksPersec, ActiveQueueLength, ConflictCheckQueueLength, Deniedduetomatch, Deniedduetononmatch, _DeclinesPersec, _DiscoversPersec, _OffersPersec, _PacketsReceivedPersec, _ReleasesPersec, _RequestsPersec
 
 MODE=checkdhcpv6, SUBMODE=stats
 =============================
    Checks various stats for Microsoft Windows Server running as an IPv6 DHCP Server
    Tested for Windows Server 2008 R2. Only tested on a zero volume server!!
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
+
+   Valid Warning/Critical Fields are: _AcksPersec, ActiveQueueLength, _ConfirmsPersec, _DeclinesPersec, _PacketsReceivedPersec, _ReleasesPersec, _RequestsPersec
 
 MODE=print, SUBMODE=spooler
 ===========================
@@ -374,10 +438,12 @@ MODE=print, SUBMODE=spooler
    ARG1: The printer queue name to view stats for. Use _Total for the total stats for all print queues.
       Use % for wildcards. The printer queue name can be seen in the Device and Printer screen
       eg "Microsoft XPS Document Writer", "%laser%"
-   DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
+   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
    This check can return information about multiple printers in a single check.
+
+   Valid Warning/Critical Fields are: _BytesPrintedPersec, JobErrors, Jobs, JobsSpooling, NotReadyErrors, OutofPaperErrors, TotalJobsPrinted, TotalPagesPrinted
 
 MODE=sample, SUBMODE=minimal
 ============================
@@ -385,9 +451,29 @@ MODE=sample, SUBMODE=minimal
    This sample simply displays the Name of the Operating System
    It has no warning/critical specification and provides no performance data
 
+MODE=sample, SUBMODE=uptime
+============================
+   Help for a sample check that is similar to checkuptime. This one is somewhat simpler and uses seconds.
+
+   Valid Warning/Critical Fields are: _UptimeSec
+
 MODE=sample, SUBMODE=full
 =========================
    Help for a sample check that specifies all currently possible fields in the ini File
+
+   Valid Warning/Critical Fields are: NumberOfProcesses, NumberOfUsers, _FreeMemPercent
+
+MODE=test, SUBMODE=1
+====================
+   Just for testing
+
+   Valid Warning/Critical Fields are: _AvgCPU
+
+MODE=test, SUBMODE=2
+====================
+   Just for testing
+
+   Valid Warning/Critical Fields are: _AvgCPU, _NoCPU, NoSuchField
 
 MODE=checkiis, SUBMODE=users
 ============================
@@ -400,6 +486,8 @@ MODE=checkiis, SUBMODE=users
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
 
+   Valid Warning/Critical Fields are: _LogonAttemptsPersec, CurrentAnonymousUsers, CurrentNonAnonymousUsers, _AnonymousUsersPersec, _NonAnonymousUsersPersec, TotalLogonAttempts, TotalAnonymousUsers, TotalNonAnonymousUsers
+
 MODE=checkiis, SUBMODE=requests
 ===============================
    Check request stats for a Microsoft IIS Web Server.
@@ -410,6 +498,8 @@ MODE=checkiis, SUBMODE=requests
    DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
+
+   Valid Warning/Critical Fields are: _GetRequestsPersec, _HeadRequestsPersec, _PostRequestsPersec, _PropfindRequestsPersec, _PutRequestsPersec, _ISAPIExtensionRequestsPersec, TotalGetRequests, TotalHeadRequests, TotalPostRequests, TotalPropfindRequests, TotalPutRequests, TotalISAPIExtensionRequests
 
 MODE=checkiis, SUBMODE=transfers
 ================================
@@ -422,6 +512,8 @@ MODE=checkiis, SUBMODE=transfers
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
 
+   Valid Warning/Critical Fields are: _BytesTotalPersec, _BytesReceivedPersec, _BytesSentPersec, _FilesPersec, _FilesReceivedPersec, _FilesSentPersec, TotalBytesTransferred, TotalBytesReceived, TotalBytesSent, TotalFilesTransferred, TotalFilesReceived, TotalFilesSent
+
 MODE=checkiis, SUBMODE=transfersV5
 ==================================
    Check transfer stats (bytes and files) for a Microsoft IIS Web Server.
@@ -432,6 +524,8 @@ MODE=checkiis, SUBMODE=transfersV5
    DELAY: (optional) specifies the number of seconds over which the CPU utilisation is calculated. Default 5.
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
+
+   Valid Warning/Critical Fields are: _BytesTotalPersec, _BytesReceivedPersec, _BytesSentPersec, _FilesPersec, _FilesReceivedPersec, _FilesSentPersec, TotalFilesTransferred, TotalFilesReceived, TotalFilesSent
 
 MODE=checkiis, SUBMODE=connections
 ==================================
@@ -444,6 +538,8 @@ MODE=checkiis, SUBMODE=connections
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
 
+   Valid Warning/Critical Fields are: CurrentConnections, _ConnectionAttemptsPersec
+
 MODE=checkiis, SUBMODE=errors
 =============================
    Check error stats for a Microsoft IIS Web Server.
@@ -455,6 +551,64 @@ MODE=checkiis, SUBMODE=errors
       The longer you can make this without timing out, the more accurate it will be. if specifying longer values
       you may also need to use the -t parameter to set a longer script timeout.
 
+   Valid Warning/Critical Fields are: _NotFoundErrorsPersec, _LockedErrorsPersec, TotalNotFoundErrors, TotalLockedErrors
+
+MODE=checkexchange, SUBMODE=listDBInstances
+===========================================
+   List the currently mounted Exchange Database instances. This is a helper check for checkexchange DBInstances but
+   does contain some performance data. Only shows instances currently mounted.
+
+   Valid Warning/Critical Fields are: _ItemCount, SessionsInUse
+
+MODE=checkexchange, SUBMODE=listSmtpSendTransports
+==================================================
+   List the transports available for SMPT Send. This is a helper check for checkexchange SmtpSend.
+
+MODE=checkexchange, SUBMODE=listSmtpReceiveTransports
+=====================================================
+   List the transports available for SMPT Receive. This is a helper check for checkexchange SmtpReceive.
+
+MODE=checkexchange, SUBMODE=HubTransportServer
+==============================================
+   Check Exchange Monitoring Hub Transport Server.
+
+   Valid Warning/Critical Fields are: _ItemsCompletedDeliveryPerSecond, _ItemsQueuedforDeliveryPerSecond, _MessagesCompletedDeliveryPerSecond, _MessagesQueuedforDeliveryPerSecond, _MessagesSubmittedPerSecond, ItemsCompletedDeliveryTotal, MessagesSubmittedTotal, ActiveMailboxDeliveryQueueLength, ActiveNonSmtpDeliveryQueueLength, ActiveRemoteDeliveryQueueLength, AggregateDeliveryQueueLengthAllQueues, SubmissionQueueLength, RetryMailboxDeliveryQueueLength, RetryNonSmtpDeliveryQueueLength, RetryRemoteDeliveryQueueLength, UnreachableQueueLength, LargestDeliveryQueueLength, PoisonQueueLength
+
+MODE=checkexchange, SUBMODE=TransportQueues
+===========================================
+   Check Microsoft Exchange Transport Queues. Tested for in Microsoft Exchange 2007.   
+
+   Valid Warning/Critical Fields are: _ItemsCompletedDeliveryPerSecond, _ItemsQueuedforDeliveryPerSecond, _MessagesCompletedDeliveryPerSecond, _MessagesQueuedforDeliveryPerSecond, _MessagesSubmittedPerSecond, ActiveMailboxDeliveryQueueLength, ActiveNonSmtpDeliveryQueueLength, ActiveRemoteDeliveryQueueLength, AggregateDeliveryQueueLengthAllQueues, ItemsCompletedDeliveryTotal, ItemsQueuedForDeliveryTotal, ItemsResubmittedTotal, LargestDeliveryQueueLength, MessagesCompletedDeliveryTotal, MessagesQueuedForDelivery, MessagesQueuedForDeliveryTotal, MessagesSubmittedTotal, PoisonQueueLength, RetryMailboxDeliveryQueueLength, RetryNonSmtpDeliveryQueueLength, RetryRemoteDeliveryQueueLength, SubmissionQueueItemsExpiredTotal
+
+MODE=checkexchange, SUBMODE=DBInstances
+=======================================
+   Check Microsoft Exchange DB Instances. Tested for Microsoft Exchange 2010. Might work on earlier versions.
+   ARG1: The Instance name to view stats for. Use % for wildcards. Use only a single % to include stats for all Instances.
+      Use the helper check checkexchange listDBInstance to list valid instances names.
+   Only works for instances currently mounted.
+   There is very limited documentation on this WMI Class. We have made our best guess at calculating the values correctly.
+   The latency calculations might still be wrong. See the ini file for comments.
+
+   Valid Warning/Critical Fields are: _ItemCount, _DatabaseCachePercentHit, DatabaseCacheSizeMB, _DatabaseCacheRequestsPersec, _DatabaseCacheMissesPersec, _IODatabaseReadsAverageLatency, _IODatabaseWritesAverageLatency, _IOLogReadsAverageLatency, _IOLogWritesAverageLatency, _IODatabaseReadsPersec, _IODatabaseWritesPersec, _IOLogReadsPersec, _IOLogWritesPersec, _LogBytesWritePersec, SessionsInUse, _TableOpenCachePercentHit, TablesOpen, _TableOpensPersec
+
+MODE=checkexchange, SUBMODE=SmtpReceive
+=======================================
+   Check Microsoft Exchange Transport SMTP Receive. Tested for in Microsoft Exchange 2007.
+   ARG1: The transport/queue name to view stats for. Use _Total for the total stats for all transports.
+      Use % for wildcards. Use only a single % to include stats for all transports.
+      Use the helper check checkexchange listSmtpReceiveTransports to list valid transport names.
+
+   Valid Warning/Critical Fields are: _BytesReceivedPersec, _ConnectionsCreatedPersec, _DisconnectionsbyAgentsPersecond, _MessageBytesReceivedPersec, _MessagesReceivedPersec, AveragebytesPerconnection_Base, AveragebytesPermessage, AveragebytesPermessage_Base, AveragemessagesPerconnection, AveragemessagesPerconnection_Base, AveragerecipientsPermessage, AveragerecipientsPermessage_Base, BytesReceivedTotal, ConnectionsTotal, Frequency_PerfTime, MessageBytesReceivedTotal, MessagesReceivedTotal, RecipientsacceptedTotal, TarpittingDelaysAnonymous
+
+MODE=checkexchange, SUBMODE=SmtpSend
+====================================
+   Check Microsoft Exchange Transport SMTP Send. Tested for in Microsoft Exchange 2007.
+   ARG1: The transport/queue name to view stats for. Use _Total for the total stats for all transports.
+      Use % for wildcards. Use only a single "%" to include stats for all transports.
+      Use the helper check "checkexchange listSmtpSendTransports" to list valid transport names.
+
+   Valid Warning/Critical Fields are: _BytesSentPersec, _ConnectionsCreatedPersec, _MessageBytesSentPersec, _MessagesSentPersec, AveragebytesPerconnection, AveragebytesPerconnection_Base, AveragemessagebytesPermessage, AveragemessagebytesPermessage_Base, AveragemessagesPerconnection, AveragemessagesPerconnection_Base, AveragerecipientsPermessage, AveragerecipientsPermessage_Base, BytesSentTotal, ConnectionsTotal, Frequency_PerfTime, MessageBytesSentTotal, MessagesSentTotal, Recipientssent
+
 MODE=checksql, SUBMODE=listdb
 =============================
    List all DBs in a SQL database. This is just a helper check.
@@ -463,6 +617,12 @@ MODE=checksql, SUBMODE=general
 =============================
    General SQLSERVER Statistics
 
+MODE=checksql, SUBMODE=ServerBufferManager
+==========================================
+   Check Microsoft SQL Server Server Buffer Manager. Tested for Microsoft SQL Server 2010.   
+
+   Valid Warning/Critical Fields are: Buffercachehitratio, _CheckpointpagesPersec, Databasepages, _FreeliststallsPersec, Freepages, _LazywritesPersec, Pagelifeexpectancy, _PagelookupsPersec, _PagereadsPersec, _PagewritesPersec, _ReadaheadpagesPersec, Reservedpages, Stolenpages, Targetpages, Totalpages
+
 MODE=checksqlex, SUBMODE=listdb
 ===============================
    List all DBs in a SQL EXPRESS database. This is just a helper check.
@@ -470,4 +630,10 @@ MODE=checksqlex, SUBMODE=listdb
 MODE=checksqlex, SUBMODE=general
 ================================
    General SQL EXPRESS Statistics
+
+MODE=checksql, SUBMODE=ServerBufferManager
+==========================================
+   Check SQL EXPRESS Server Buffer Manager. Tested for Microsoft SQL EXPRESS 2008.   
+
+   Valid Warning/Critical Fields are: Buffercachehitratio, _CheckpointpagesPersec, Databasepages, _FreeliststallsPersec, Freepages, _LazywritesPersec, Pagelifeexpectancy, _PagelookupsPersec, _PagereadsPersec, _PagewritesPersec, _ReadaheadpagesPersec, Reservedpages, Stolenpages, Targetpages, Totalpages
 
