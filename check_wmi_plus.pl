@@ -27,12 +27,11 @@
 # the full path is required since when Nagios runs this whole plugin becomes a subroutine of /usr/sbin/p1.pl
 # and when it becomes a subroutine there is no such thing as the current directory or the same directory as this script
 # eg $0 becomes /usr/sbin/p1.pl no matter where you install this script
-## NOTE: If you created a sym link from the setting that comes in the release version to your real conf file, you'd never need to change this script when you get a new version
-# eg mkdir -p /opt/nagios/bin/plugins;ln -s MYCONF /opt/nagios/bin/plugins/check_wmi_plus.conf
-my $conf_file='/opt/nagios/bin/plugins/check_wmi_plus.conf';
+my $conf_file='/etc/check_wmi_plus/check_wmi_plus.conf';
 
 # we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
 use lib "/usr/lib/nagios/plugins";
+use lib "/usr/lib64/nagios/plugins"; 
 
 # you shouldn't need to change anything else below this line
 # change the settings in the $conf_file itself
@@ -44,7 +43,7 @@ use lib "/usr/lib/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.59;
+our $VERSION=1.60;
 
 # which version of PRO (if used does this require)
 our $requires_PRO_VERSION=1.26;
@@ -57,7 +56,6 @@ use Data::Dumper;
 use Storable;
 use Config::IniFiles;
 use DateTime;
-
 
 # command line option declarations
 our $opt_auth_file='';
@@ -119,6 +117,7 @@ our %the_arguments = (
    _nodataexit  => '',
    _nodatastring=> "WMI Query returned no data. The item you were looking for may NOT exist or the software that creates the WMI Class may not be running, or all data has been excluded.\n",
    _timeout     => '',
+   _truncate_output  => 8192,
 );
 
 # arrays/hashes where we will store information about warn/critical specs/checks
@@ -162,7 +161,10 @@ my $PROGNAME="check_wmi_plus";
 
 my $default_bytefactor=1024;
 
-
+# work out the conf file dir
+our $conf_file_dir=$conf_file;
+# remove the filename from the end of the conf_file to get the dir
+$conf_file_dir=~s/^(.*)\/(.*?)$/$1/; 
 
 # ================================== DEFAULT CONFIGURATION ================================
 # override these settings using the $conf_file (which is defined right near the top of this script)
@@ -174,19 +176,18 @@ my $default_bytefactor=1024;
 our $base_dir='/opt/nagios/bin/plugins';
 
 # This is the full path location of the wmic command
-# - standard value "$base_dir/wmic"
-our $wmic_command="/bin/wmic";
+# - standard value "/usr/bin/wmic" since this is where it goes when it is compiled
+our $wmic_command="/usr/bin/wmic"; # CHANGE THIS IF NEEDED
 
 # set the location of the ini file. Set to '' if not using it or specify using the --inifile parameter
 # set this to something else if you want
-# - standard value "$base_dir/check_wmi_plus.ini"
+# - standard value "$conf_file_dir/check_wmi_plus.ini"
 our $wmi_ini_file='';
 
 # set the location of the ini dir. Set to '' if not using it or specify using the --inidir parameter
 # set this to something else if you want
-# you might like to use "$base_dir/wmic"
-# - standard value "$base_dir/check_wmi_plus.d"
-our $wmi_ini_dir="$base_dir/check_wmi_plus.d";
+# - standard value "$conf_file_dir/check_wmi_plus.d"
+our $wmi_ini_dir="$conf_file_dir/check_wmi_plus.d";
 
 # set the location of temporary directory - used for keep state option
 # if running on Windows then $ENV{'TMP'} will be set and hence used
@@ -199,8 +200,8 @@ our $make_manpage_script="$base_dir/check_wmi_plus.makeman.sh";
 our $manpage_dir="$wmi_ini_dir";
 
 # PRO only: set the location of where the check_wmi_plus will store some persistent data
-# - standard value "$base_dir/check_wmi_plus.data"
-our $wmi_data_dir="$base_dir/check_wmi_plus.data";
+# - standard value "$conf_file_dir/check_wmi_plus.data"
+our $wmi_data_dir="$conf_file_dir/check_wmi_plus.data";
 
 # PRO only: this is the file where the usage stats are stored (if using it via $collect_usage_info or --icollectusage)
 our $usage_db_file="$wmi_data_dir/check_wmi_plus.usagedb";
@@ -274,13 +275,16 @@ eval {
 
 # try and open the conf file to get any user set variables
 # if it does not work, just ignore and carry on
-our $conf_file_dir=$conf_file;
-$conf_file_dir=~s/^(.*)\/(.*?)$/$1/;
-# print "Conf File Dir: $conf_file_dir\n";
 if (-f "$conf_file") {
    if (!defined(do "$conf_file")) {
       die "Configuration File Error with $conf_file (mostly likely a syntax error)";
    }
+}
+
+# check the base_dir
+# if it does not work die
+if (! -d "$base_dir") {
+      die "The variable '\$base_dir' in $conf_file is not set to a valid directory";
 }
 
 # do this use here since the user might have changed the directory we in the conf file
@@ -362,7 +366,7 @@ our %valid_test_fields = (
    checkfoldersize   => [ qw(_FolderSize _ItemCount) ],
    checkgeneric      => [ qw(FileControlBytesPersec FileControlOperationsPersec FileDataOperationsPersec FileReadBytesPersec FileReadOperationsPersec FileWriteBytesPersec FileWriteOperationsPersec) ],
    checkmem          => [ qw(_MemUsed% _MemFree% _MemUsed _MemFree _MemTotal) ],
-   checknetwork      => [ qw(CurrentBandwidth _PacketsSentPersec _PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors _BytesSentPersec _BytesReceivedPersec _SendByteUtilisation _ReceiveByteUtilisation) ],
+   checknetwork      => [ qw(CurrentBandwidth _PacketsSentPersec _PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors _BytesSentPersec _BytesReceivedPersec _SendBytesUtilisation _ReceiveBytesUtilisation) ],
    checkpage         => [ qw(_Used% _Used _Free _Free% _PeakUsed% _PeakUsed _PeakFree _PeakFree% _Total) ], 
    checkprocess      => [ qw(_ItemCount _NumExcluded) ],
    checkservice      => [ qw(_NumBad _NumGood _NumExcluded _Total) ],
@@ -521,6 +525,7 @@ GetOptions(
    "extrawmicargs=s@"         => \@opt_extra_wmic_args,
    "forceiniopen"             => \$force_ini_open,
    "forcewmiccommand"         => \$force_wmic_command,
+   "forcetruncateoutput=s"    => \$the_arguments{'_truncate_output'},
    "help"                     => \$opt_help,
    "Hostname=s"               => \$the_arguments{'_host'},
    "icollectusage!"           => \$opt_collect_usage,
@@ -582,8 +587,8 @@ our $use_wmilib=0;
 # to see if the pro library is being used
 our $use_pro_library=0;
 
-if (-f "$conf_file_dir/check_wmi_plus_pro.pl") {
-   if (do "$conf_file_dir/check_wmi_plus_pro.pl") {
+if (-f "$base_dir/check_wmi_plus_pro.pl") {
+   if (do "$base_dir/check_wmi_plus_pro.pl") {
       $debug && print "Pro Library is present\n";
       init_pro_module();
    } else {
@@ -632,23 +637,6 @@ if ($opt_log_usage_show && $use_pro_library) {
    exit;
 }
 
-if ($opt_package) {
-   my $tarfile="check_wmi_plus.v$VERSION.tar.gz";
-   # tar up the files and dir, exclude subversion directory
-   # run the plugin and put its help screen in a readme
-   my $output=`$0 --itexthelp`;
-   open(README,">$base_dir/check_wmi_plus.README.txt");
-   print README "check_wmi_plus v$VERSION\nFor installation details and more downloads see http://www.edcint.co.nz/checkwmiplus\nThe --help output follows - \n\n";
-   print README $output;
-   close(README);
-   # a bit of hard coding here .....
-   $output=`cd $base_dir;cp check_wmi_plus.conf check_wmi_plus.conf.sample;rm check_wmi_plus.data/check_wmi_plus.compiledini;touch check_wmi_plus.data/check_wmi_plus.compiledini;chown -R nagios:nagios *;tar czvf $tarfile --no-recursion --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus.README.txt check_wmi_plus.conf.sample check_wmi_plus.d/* check_wmi_plus.data event_generic.pl check_wmi_plus.makeman.sh`;
-   print $output;
-   print "Created $base_dir/$tarfile\n";
-   $output=`cd $base_dir;rm check_wmi_plus.conf.sample`;
-   exit 0;
-}
-
 # check module versions as they very often cause problems if older than developed with
 # unless ignored by command line option
 if ($opt_ignore_versions || $ignore_my_outdated_perl_module_versions) {
@@ -679,6 +667,7 @@ if ($debug || $test_generate) {
          $command_line=~s/-p\s*(\S*?)\s/-p PASS /;
       }
       print "Command Line (v$VERSION): $0 $command_line\n";
+      print "Base Dir: $base_dir\n";
       print "Conf File Dir: $conf_file_dir\n";
       print "Loaded Conf File $conf_file\n";
          
@@ -706,6 +695,33 @@ if ($debug || $test_generate) {
    }
 }
 
+if ($opt_package) {
+   print "Creating Check WMI Plus Bundle\n";
+   my $tarfile="check_wmi_plus.v$VERSION.tar.gz";
+   # tar up the files and dir, exclude subversion directory
+   # run the plugin and put its help screen in a readme
+   my $output=`$0 --itexthelp --noishowusage --noicollectusage`;
+   open(README,">$base_dir/check_wmi_plus.README.txt");
+   print README "check_wmi_plus v$VERSION\nFor installation details and more downloads see http://www.edcint.co.nz/checkwmiplus\nThe --help output follows - \n\n";
+   print README $output;
+   close(README);
+
+   # a bit of hard coding here .....
+   my $cmd="
+      cd $base_dir;
+      cp $conf_file_dir/check_wmi_plus.conf $conf_file_dir/check_wmi_plus.conf.sample;
+      sed -i 's#/opt/nagios/bin/plugins#CHANGE ME TO THE DIRECTORY WHERE THE PLUGIN IS INSTALLED#' $conf_file_dir/check_wmi_plus.conf.sample;
+      rm $wmi_data_dir/check_wmi_plus.compiledini;
+      touch $wmi_data_dir/check_wmi_plus.compiledini;
+      chown -R nagios:nagios $conf_file_dir $base_dir;
+      tar czvf $tarfile --no-recursion --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus.README.txt $conf_file_dir/check_wmi_plus.conf.sample $wmi_ini_dir/* $wmi_data_dir $wmi_data_dir/check_wmi_plus.compiledini event_generic.pl check_wmi_plus.makeman.sh
+      ";
+   $output=`$cmd 2>&1`;
+   print "CMD:$cmd\n\nOUTPUT:$output\n\n";
+   print "Created $base_dir/$tarfile\n";
+   $output=`rm $conf_file_dir/check_wmi_plus.conf.sample`;
+   exit 0;
+}
 
 if ($opt_command_examples) {
    show_command_examples("$wmi_ini_dir/$command_examples_ini_file{$opt_command_examples}");
@@ -1213,7 +1229,7 @@ finish_program($ERRORS{'UNKNOWN'});
 sub short_usage {
 my ($no_exit)=@_;
 print <<EOT;
-Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen]
+Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN]
 EOT
 if (!$no_exit) {
    print "Help as a Manpage: --help\nHelp as Text: --itexthelp\n";
@@ -1280,7 +1296,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [--joinexpiry JEXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN]
  
  Help as a Manpage:  
  
@@ -1389,6 +1405,8 @@ LESS COMMONLY USED OPTIONS
  --variablesdisabled  Disable the use of static variables (from the ini files).
  
  --forceiniopen  Force reading of the ini files. You may want to do this if you are doing a non-ini file check and you are using global variables defined in an ini file. Only use this if you really need it since it makes each invocation of the plugin a lot slower (unless you are doing an ini file check already).
+ 
+ --forcetruncateoutput LEN  Restrict the length of the plugin output to LEN bytes. The default value is $the_arguments{'_truncate_output'}.
 
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc. Keeping State is used by default.
@@ -2518,6 +2536,14 @@ if ($display=~/\n/) {
 # if there is no perfdata | will be the last character - remove | if it is at the end
 $combined=~s/\|$//;
 
+if ($the_arguments{'_truncate_output'}) {
+   my $output_length=length($combined);
+   if ($output_length>$the_arguments{'_truncate_output'}) {
+      $debug && print "Truncating output from $output_length bytes to $the_arguments{'_truncate_output'} bytes\n";
+      $combined=substr($combined,0,$the_arguments{'_truncate_output'});
+   }
+}
+
 #$debug && print "IN:$display|$perfdata\n";
 $debug && print "OUT:$combined\n";
 return $combined;
@@ -2903,6 +2929,84 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
          }
       } else {
          $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
+      }
+   } else {
+      # not enough WMI data to return result
+      $final_result='Need at least 2 WMI samples';
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
+} elsif ($function eq 'PERF_AVERAGE_TIMER') {
+   # NOT YET TESTED
+   # it requires two completed WMI queries (sample=2)
+   # Formula = ((Nx - N0)/F ) / ((Dx - D0) )
+   # we assume that the Timefield (D) we need is Timestamp_Sys100NS
+   # we assume that the Frequency (F) we need is Frequency_Sys100NS
+   # 
+   # the parameters for this "function" are
+   # SOURCEFIELD,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
+   # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
+   #
+   my $final_result='CALC_FAIL';
+   # this function requires exactly 2 WMI data results ie you should have done 2 WMI queries - if you did more that's your problem
+   # check this first
+   if ($$wmidata[$query_index][0]{'_ChecksOK'}>=2) {
+      my @parameter=split(',',$function_parameters);
+      if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]})) {
+         $debug && print "Core Calc: ( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} ) / 
+                       (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) ) = ";
+         $final_result=( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/ 
+                       (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) ) ;
+         check_for_invalid_calculation_result(\$final_result);
+         $debug && print " $final_result\n";
+         if ($parameter[1]) {
+            $final_result=sprintf($parameter[1],$final_result);
+         }
+      } else {
+         $debug && print "WARNING: The value in the requested field ($parameter[0]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}'\n";
+      }
+   } else {
+      # not enough WMI data to return result
+      $final_result='Need at least 2 WMI samples';
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
+} elsif ($function eq 'PERF_AVERAGE_BULK' || $function eq 'PERF_SAMPLE_FRACTION') {
+   # NOT YET TESTED
+   # refer https://msdn.microsoft.com/en-au/library/ms803755.aspx
+   # it requires two completed WMI queries (sample=2)
+   # Formula = N1 - N0 / D1 - D0
+   #
+   # the parameters for this "function" are
+   # SOURCEFIELD_N,SOURCEFIELD_D,MULTIPLIER,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
+   # SOURCEFIELD [1] is the WMI Field to base this on - required
+   # MULTIPLIER [2] is a multiplier useful to make the fraction a percentage eg 100 - probably set to 1 for PERF_AVERAGE_BULK and set to 100 for PERF_SAMPLE_FRACTION
+   # SPRINTF_SPEC [3] - a format specification passed directly to sprintf to format the result (can leave blank)
+   #
+   my $final_result='CALC_FAIL';
+   # this function requires exactly 2 WMI data results ie you should have done 2 WMI queries - if you did more that's your problem
+   # check this first
+   if ($$wmidata[$query_index][0]{'_ChecksOK'}>=2) {
+      my @parameter=split(',',$function_parameters);
+      if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]}) && looks_like_number($$wmidata[$query_index][$which_row]{$parameter[1]})) {
+         $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+                       ($$wmidata[$query_index][$which_row]{$parameter[1]} - $$wmidata[0][$which_row]{$parameter[1]}) = ";
+         $final_result=($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+                       ($$wmidata[$query_index][$which_row]{$parameter[1]} - $$wmidata[0][$which_row]{$parameter[1]});
+         check_for_invalid_calculation_result(\$final_result);
+         $debug && print " $final_result\n";
+         if ($parameter[2]) {
+            $final_result=$final_result*$parameter[2];
+         }
+         if ($parameter[3]) {
+            $final_result=sprintf($parameter[3],$final_result);
+         }
+      } else {
+         $debug && print "WARNING: The value in the requested field ($parameter[0] or $parameter[1]) does not look like a number - we got '$$wmidata[$query_index][$which_row]{$parameter[0]}' and '$$wmidata[$query_index][$which_row]{$parameter[1]}'\n";
       }
    } else {
       # not enough WMI data to return result
@@ -4007,8 +4111,13 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
       calc_new_field('_BytesSentPersec','PERF_COUNTER_COUNTER','BytesSentPersec,%.0f',\@collected_data,$last_wmi_data_index,$i);
       calc_new_field('_PacketsReceivedPersec','PERF_COUNTER_COUNTER','PacketsReceivedPersec,%.0f',\@collected_data,$last_wmi_data_index,$i);
       calc_new_field('_PacketsSentPersec','PERF_COUNTER_COUNTER','PacketsSentPersec,%.0f',\@collected_data,$last_wmi_data_index,$i);
-      calc_new_field('_ReceiveBytesUtilisation','percent','_BytesReceivedPersec,CurrentBandwidth,%.2f',\@collected_data,$last_wmi_data_index,$i);
-      calc_new_field('_SendBytesUtilisation','percent','_BytesSentPersec,CurrentBandwidth,%.2f',\@collected_data,$last_wmi_data_index,$i);
+
+      # calculate the interface bandwidth in bytes (it is bits from the WMI query), divide the bits by 8 
+      calc_new_field('_CurrentBandwidthBytes','basicmaths',"CurrentBandwidth,/,8,%.2f",\@collected_data,$last_wmi_data_index,$i);
+      
+      # calculate the interface utilisation using the new interface bandwidth in bytes
+      calc_new_field('_ReceiveBytesUtilisation','percent','_BytesReceivedPersec,_CurrentBandwidthBytes,%.2f',\@collected_data,$last_wmi_data_index,$i);
+      calc_new_field('_SendBytesUtilisation','percent','_BytesSentPersec,_CurrentBandwidthBytes,%.2f',\@collected_data,$last_wmi_data_index,$i);
 
    # the parameters for this "function" are
    # SOURCEFIELD1,SOURCEFIELD2,SPRINTF_SPEC

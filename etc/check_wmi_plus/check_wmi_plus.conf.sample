@@ -13,39 +13,35 @@
 
 # Set the full path where the plugin is installed
 # You might not even use this variable if you have different locations for everything
-# as a first guess, grab the directory that this conf file lives in
-$base_dir="$conf_file_dir";  # CHANGE THIS IF NEEDED
+$base_dir='CHANGE ME TO THE DIRECTORY WHERE THE PLUGIN IS INSTALLED'; # CHANGE THIS IF NEEDED
 
 # This is the full path location of the wmic command
-# - standard value "$base_dir/wmic"
-$wmic_command="/bin/wmic"; # CHANGE THIS IF NEEDED
+# - standard value "/usr/bin/wmic" since this is where it goes when it is compiled
+$wmic_command="/usr/bin/wmic"; # CHANGE THIS IF NEEDED
 
-# you do not need to use this if you are using $wmi_ini_dir
-# normally you would only use this if you had a single specific ini file you wanted to use
 # set the location of the ini file. Set to '' if not using it or specify using the --inifile parameter
 # set this to something else if you want
-# - standard value "$base_dir/check_wmi_plus.ini"
-$wmi_ini_file=''; # CHANGE THIS IF NEEDED
+# - standard value "$conf_file_dir/check_wmi_plus.ini"
+$wmi_ini_file='';
 
 # set the location of the ini dir. Set to '' if not using it or specify using the --inidir parameter
 # set this to something else if you want
-# you might like to use "$base_dir/wmic"
-# - standard value "$base_dir/check_wmi_plus.d"
-$wmi_ini_dir="$base_dir/check_wmi_plus.d"; # CHANGE THIS IF NEEDED,
+# - standard value "$conf_file_dir/check_wmi_plus.d"
+$wmi_ini_dir="$conf_file_dir/check_wmi_plus.d";
 
 # set the location of temporary directory - used for keep state option
 # if running on Windows then $ENV{'TMP'} will be set and hence used
-$tmp_dir=$ENV{"TMP"} || '/tmp'; # CHANGE THIS IF NEEDED
+$tmp_dir=$ENV{"TMP"} || '/tmp';
 
 # this script helps with making the manpage help. By default it is in the same directory as the plugin itself
-$make_manpage_script="$base_dir/check_wmi_plus.makeman.sh"; # CHANGE THIS IF NEEDED
+$make_manpage_script="$base_dir/check_wmi_plus.makeman.sh";
 
 # this is the directory where the manpage is stored when created, defaults to the same directory as the ini files
-$manpage_dir="$wmi_ini_dir"; # CHANGE THIS IF NEEDED
+$manpage_dir="$wmi_ini_dir";
 
 # PRO only: set the location of where the check_wmi_plus will store some persistent data
-# - standard value "$base_dir/check_wmi_plus.data"
-$wmi_data_dir="$base_dir/check_wmi_plus.data";
+# - standard value "$conf_file_dir/check_wmi_plus.data"
+$wmi_data_dir="$conf_file_dir/check_wmi_plus.data";
 
 # PRO only: this is the file where the usage stats are stored (if using it via $collect_usage_info or --icollectusage)
 $usage_db_file="$wmi_data_dir/check_wmi_plus.usagedb";
