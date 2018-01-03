@@ -21,18 +21,32 @@
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #
 
+# ----------------------------------------------------------
+# ---------------- CHANGE THESE SETTINGS -------------------
+# Location of the conf file for the remainder of the settings
+# the full path is required since when Nagios runs this whole plugin becomes a subroutine of /usr/sbin/p1.pl
+# and when it becomes a subroutine there is no such thing as the current directory or the same directory as this script
+# eg $0 becomes /usr/sbin/p1.pl no matter where you install this script
+my $conf_file='/opt/nagios/bin/plugins/check_wmi_plus.conf';
+
+# you shouldn't need to change anything else below this line
+# change the settings in the $conf_file itself
+# ---------------- END CHANGE THESE SETTINGS ---------------
+# ----------------------------------------------------------
+
+
 #==============================================================================
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.46";
+my $VERSION="1.47";
+
+# we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
+use lib "/usr/lib/nagios/plugins";
 
 use strict;
 use Getopt::Long;
 use Scalar::Util qw(looks_like_number);
-use vars qw($PROGNAME);
-use lib "/usr/lib/nagios/plugins"; # CHANGE THIS IF NEEDED
-use utils qw ($TIMEOUT %ERRORS &print_revision &support);
 
 # command line option declarations
 my $opt_Version='';
@@ -41,6 +55,7 @@ my $opt_mode='';
 my $opt_submode='';
 my $opt_username='';
 my $opt_password='';
+my $opt_wminamespace='root/cimv2'; # this is the default namespace
 my $opt_warn=(); # this becomes an array reference
 my $opt_critical=(); # this becomes an array reference
 my $debug=0; # default value
@@ -51,7 +66,8 @@ my $opt_package='';
 my $opt_keep_state=1;
 my $opt_keep_state_id='';
 my $opt_keep_state_expiry='3600'; # default number of seconds after which keep state results are considered expired
-my $opt_osversion='';
+my $opt_texthelp=0;
+my $opt_command_examples='';
 
 # they all start with _ since later they are copied into the data array/hash and this reduces the chance they clash
 # then we have consistent usage throughout
@@ -65,8 +81,9 @@ my %the_arguments = (
    _bytefactor  => '',
    _delay       => '',
    _host        => '',
-   _nodata      => '',
+   _nodatamode  => '',
    _nodataexit  => '',
+   _nodatastring=> "WMI Query returned no data. The item you were looking for may NOT exist or the software that creates the WMI Class may not be running.\n",
    _timeout     => '',
 );
 
@@ -85,35 +102,55 @@ my $wmic_split_delimiter='\|';
 #=================================== CONFIG ===================================
 #==============================================================================
 
-$PROGNAME="check_wmi_plus";
+my $PROGNAME="check_wmi_plus";
 
 my $default_bytefactor=1024;
 
-# ---------------------- FILE LOCATIONS -------------------------
+# ---------------------- DEFAULT FILE LOCATIONS -------------------------
+# override these settings using the $conf_file (which is defined right near the top of this script)
 # I have everything installed in /opt/nagios/bin/plugins
 
-# You may want to change this to suit you
 # You might not even use this variable if you have different locations for everything
-my $base_dir='/opt/nagios/bin/plugins';  # CHANGE THIS IF NEEDED
+our $base_dir='/opt/nagios/bin/plugins';
 
-# set this to something else if you want
+# This is the full path location of the wmic command
 # - standard value "$base_dir/wmic"
-my $wmic_command="/bin/wmic"; # CHANGE THIS IF NEEDED
+our $wmic_command="/bin/wmic";
 
 # set the location of the ini file. Set to '' if not using it or specify using the --inifile parameter
 # set this to something else if you want
 # - standard value "$base_dir/check_wmi_plus.ini"
-my $wmi_ini_file=''; # CHANGE THIS IF NEEDED
+our $wmi_ini_file='';
 
 # set the location of the ini dir. Set to '' if not using it or specify using the --inidir parameter
 # set this to something else if you want
 # you might like to use "$base_dir/wmic"
 # - standard value "$base_dir/check_wmi_plus.d"
-my $wmi_ini_dir="$base_dir/check_wmi_plus.d"; # CHANGE THIS IF NEEDED,
+our $wmi_ini_dir="$base_dir/check_wmi_plus.d";
 
 # set the location of temporary directory - used for keep state option
-my $tmp_dir='/tmp'; # CHANGE THIS IF NEEDED,
-# -------------------- END FILE LOCATIONS -------------------------
+our $tmp_dir='/tmp';
+
+# this script helps with making the manpage help. By default it is in the same directory as the plugin itself
+our $make_manpage_script="$base_dir/check_wmi_plus.makeman.sh";
+
+# this is the directory where the manpage is stored when created, defaults to the same directory as the ini files
+our $manpage_dir="$wmi_ini_dir";
+
+# -------------------- END DEFAULT FILE LOCATIONS -------------------------
+
+# try and open the conf file to get any user set variables
+# if it does not work, just ignore and carry on
+our $conf_file_dir=$conf_file;
+$conf_file_dir=~s/^(.*)\/(.*?)$/$1/;
+# print "Conf File Dir: $conf_file_dir\n";
+if (-f "$conf_file") {
+   do "$conf_file" || die "Configuration File Error with $conf_file (mostly likely a syntax error)";
+   # print "Loaded Conf File $conf_file\n";
+}
+
+# do this use here since the user might have changed the directory we in the conf file
+use utils qw ($TIMEOUT %ERRORS &print_revision &support);
 
 # list all valid modes with dedicated subroutines here
 # all the modes that can take a critical/warning specification set to value of 1
@@ -176,8 +213,8 @@ my %valid_test_fields = (
    checkmem          => [ qw(_MemUsed% _MemFree% _MemUsed _MemFree _MemTotal) ],
    checknetwork      => [ qw(CurrentBandwidth _PacketsSentPersec _PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors _BytesSentPersec _BytesReceivedPersec) ],
    checkpage         => [ qw(_Used% _Used _Free _Free% _PeakUsed% _PeakUsed _PeakFree _PeakFree% _Total) ], 
-   checkprocess      => [ qw(_ItemCount) ],
-   checkservice      => [ qw(_NumBad _NumGood _Total) ],
+   checkprocess      => [ qw(_ItemCount _NumExcluded) ],
+   checkservice      => [ qw(_NumBad _NumGood _NumExcluded _Total) ],
    checkuptime       => [ qw(_UptimeSec) ],
 
 );
@@ -217,8 +254,8 @@ my %display_fields = (
    checkmem          => [ '_DisplayMsg||~|~| - ||', 'MemType||~|~|~||: ', '_MemTotal|#B|Total|: | - ||', '_MemUsed|#B|Used|: | ||', '_MemUsed%|%|~|~| - |(|)', '_MemFree|#B|Free|: | ||', '_MemFree%|%|~|~||(|)' ], 
    checknetwork      => [ '_DisplayMsg||~|~| - ||', 'Name||Interface: |~| ||', 'CurrentBandwidth|#bit/s|Speed:|~| |(|)', '_BytesSentPersec|#B/sec|Byte Send Rate||||', '_BytesReceivedPersec|#B/sec|Byte Receive Rate||||', '_PacketsSentPersec|#packet/sec|Packet Send Rate||||', '_PacketsReceivedPersec|#packet/sec|Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
    checkpage         => [ '_DisplayMsg||~|~| - ||', '_Total|#B|Total|: | - ||', '_Used|#B|Used|: | ||', '_Used%|%|~|~| - |(|)', '_Free|#B|Free|: | ||', '_Free%|%|~|~||(|)', '_PeakUsed|#B|Peak Used|: | ||', '_PeakUsed%|%|~|~| - |(|)', '_PeakFree|#B|Peak Free|: | ||', '_PeakFree%|%|~|~||(|)' ], 
-   checkprocess      => [ '_DisplayMsg||~|~| - ||', '_ItemCount| Instance(s)|Found |~|~|| of "{_arg1}" running.', 'ProcessList||~|~|~||' ],
-   checkservice      => [ '_DisplayMsg||~|~| - ||', '_Total| Services(s)|Found |~|||', '_NumGood| OK|~|~| and ||', '_NumBad| with problems. |~|~|~||', '_ServiceList||~|~|~||' ],
+   checkprocess      => [ '_DisplayMsg||~|~| - ||', '_ItemCount| Instance(s)|Found |~|~|| of "{_arg1}" running ', '_NumExcluded| excluded|~|~|~|(|). ', 'ProcessList||~|~|~||' ],
+   checkservice      => [ '_DisplayMsg||~|~| - ||', '_Total| Services(s)|Found |~|||', '_NumGood| OK|~|~| and ||', '_NumBad| with problems |~|~|~||', '_NumExcluded| excluded|~|~|~|(|). ', '_ServiceList||~|~|~||' ],
    checkuptime       => [ '_DisplayMsg||~|~| - ||', '_DisplayTime||System Uptime is |~|.||' ],
 
 );
@@ -243,12 +280,22 @@ my %performance_data_fields = (
    checkmem          => [ '_MemUsed|Bytes|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ], 
    checknetwork      => [ '_BytesSentPersec', '_BytesReceivedPersec', '_PacketsSentPersec', '_PacketsReceivedPersec', 'OutputQueueLength', 'PacketsReceivedErrors' ],
    checkpage         => [ '_Total|Bytes|Page File Size', '_Used|Bytes|Used', '_Used%|%|Utilisation', '_PeakUsed|Bytes|Peak Used', '_PeakUsed%|%|Peak Utilisation' ], 
-   checkprocess      => [ '_ItemCount||Process Count' ],
-   checkservice      => [ '_Total||Total Service Count', '_NumGood||Service Count OK State', '_NumBad||Service Count Problem State' ],
+   checkprocess      => [ '_ItemCount||Process Count', '_NumExcluded||Excluded Process Count' ],
+   checkservice      => [ '_Total||Total Service Count', '_NumGood||Service Count OK State', '_NumBad||Service Count Problem State', '_NumExcluded||Excluded Service Count' ],
    checkuptime       => [ '_UptimeMin|min|Uptime Minutes' ],
 
 );
 
+# a couple of defaults we use for ini files
+my $default_inifile_number_wmi_samples=1;
+my $default_inifile_delay=5;
+
+# some default help text
+my $default_help_text_delay="DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate.";
+
+# name of command example ini file - not named as .ini so that it does not get read as part of reading other ini files
+# assumed to be in the same dir as the other ini files
+my $command_examples_ini_file='CommandExamples.chtml';
 
 #==============================================================================
 #================================== PARAMETERS ================================
@@ -264,13 +311,14 @@ if ($ARGV[$#ARGV]) {
 
 Getopt::Long::Configure('no_ignore_case');
 GetOptions(
-   "Version"            => \$opt_Version,
+   "version"            => \$opt_Version,
    "help"               => \$opt_help,
    "mode=s"             => \$opt_mode,
    "submode=s"          => \$opt_submode,
    "Hostname=s"         => \$the_arguments{'_host'},
    "username=s"         => \$opt_username,
    "password=s"         => \$opt_password,
+   "namespace=s"        => \$opt_wminamespace,
    "arguments=s"        => \$the_arguments{'_arg1'},
    "otheraguments=s"    => \$the_arguments{'_arg2'},
    "3arg=s"             => \$the_arguments{'_arg3'},
@@ -280,34 +328,42 @@ GetOptions(
    "timeout=i"          => \$the_arguments{'_timeout'},
    "bytefactor=s"       => \$the_arguments{'_bytefactor'},
    "debug+"             => \$debug,
-   "nodata"             => \$the_arguments{'_nodata'},
-   "xnodataexit=s"      => \$the_arguments{'_nodataexit'},
+   "nodatamode"         => \$the_arguments{'_nodatamode'},
+   "nodataexit=s"       => \$the_arguments{'_nodataexit'},
+   "nodatastring=s"     => \$the_arguments{'_nodatastring'},
    "value=s"            => \$opt_value,
    "ydelay=s"           => \$the_arguments{'_delay'},
    "z"                  => \$opt_z,
    "inifile=s"          => \$wmi_ini_file,
    "inidir=s"           => \$wmi_ini_dir,
    "inihelp"            => \$opt_inihelp,
+   "itexthelp"          => \$opt_texthelp,
    "ipackage"           => \$opt_package,
    "keepstate!"         => \$opt_keep_state,
    "keepid=s"           => \$opt_keep_state_id,
    "keepexpiry=s"       => \$opt_keep_state_expiry,
-   "versionos"          => \$opt_osversion,
+   "iexamples"          => \$opt_command_examples,
    );
 
 if ($opt_package) {
    my $tarfile="check_wmi_plus.v$VERSION.tar.gz";
    # tar up the files and dir, exclude subversion directory
    # run the plugin and put its help screen in a readme
-   my $output=`$0 --help`;
+   my $output=`$0 --itexthelp`;
    open(README,">$base_dir/check_wmi_plus.README.txt");
    print README "check_wmi_plus v$VERSION\nFor installation details and more downloads see http://www.edcint.co.nz/checkwmiplus\nThe --help output follows - \n\n";
    print README $output;
    close(README);
    # a bit of hard coding here .....
-   $output=`cd $base_dir;tar czvf $tarfile --exclude=.svn check_wmi_plus.pl check_wmi_plus.README.txt check_wmi_plus.d`;
+   $output=`cd $base_dir;cp check_wmi_plus.conf check_wmi_plus.conf.sample;tar czvf $tarfile --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus.README.txt check_wmi_plus.conf.sample check_wmi_plus_examples.sh check_wmi_plus.d `;
    print $output;
    print "Created $base_dir/$tarfile\n";
+   $output=`cd $base_dir;rm check_wmi_plus.conf.sample`;
+   exit 0;
+}
+
+if ($opt_command_examples) {
+   show_command_examples();
    exit 0;
 }
 
@@ -320,14 +376,29 @@ if ($debug) {
       $command_line=~s/-p\s*(\S*?)\s/-p PASS /;
    }
    print "Command Line (v$VERSION): $0 $command_line\n";
+   print "Conf File Dir: $conf_file_dir\n";
+   print "Loaded Conf File $conf_file\n";
+   
    if ($debug>=2) {
+      no warnings;
       # get some info about the system
       $wmic_delimiter='!';
       $wmic_split_delimiter='!';
       print "======================================== SYSTEM INFO =====================================================\n";
+      print "--------------------- Module Versions ---------------------\n";
+      print "Perl Version: $]\n";
+      print "Getopt::Long - $Getopt::Long::VERSION\n";
+      print "Scalar::Util - $Scalar::Util::VERSION\n";
+      print "Data::Dumper - $Data::Dumper::VERSION\n";
+      print "Config::IniFiles - $Config::IniFiles::VERSION\n";
+      print "Storable - $Storable::VERSION\n";
+      print "Net::DNS - $Net::DNS::VERSION\n";
+      print "--------------------- Environment ---------------------\n";
       print "ENV=" . Dumper(\%ENV);
+      print "--------------------- Computer System ---------------------\n";
       get_multiple_wmi_samples(1,"SELECT * FROM Win32_ComputerSystem",
       '','',my $dummy1,\$the_arguments{'_delay'},undef,0);
+      print "--------------------- Operating System ---------------------\n";
       get_multiple_wmi_samples(1,"SELECT * FROM Win32_OperatingSystem",
       '','',my $dummy2,\$the_arguments{'_delay'},undef,0);
       $wmic_delimiter='|';
@@ -342,10 +413,10 @@ if ($opt_keep_state) {
 
 # check up on the ini file
 if ($wmi_ini_file && ! -f $wmi_ini_file) {
-   print "This plugin requires an INI file. Configure its location by setting the \$wmi_ini_file variable in this plugin or by using the --inifile parameter to override the default setting. Ini File currently set to '$wmi_ini_file'";
+   print "This plugin requires an INI file. Configure its location by setting the \$wmi_ini_file variable in '$conf_file' or by using the --inifile parameter to override the default setting. Ini File currently set to '$wmi_ini_file'";
    exit $ERRORS{"UNKNOWN"};
 } elsif ($wmi_ini_dir && ! -d $wmi_ini_dir) {
-   print "This plugin requires an INI directory. Configure its location by setting the \$wmi_ini_dir variable in this plugin or by using the --inidir parameter to override the default setting. Ini Directory currently set to '$wmi_ini_dir'";
+   print "This plugin requires an INI directory. Configure its location by setting the \$wmi_ini_dir variable in '$conf_file' or by using the --inidir parameter to override the default setting. Ini Directory currently set to '$wmi_ini_dir'";
    exit $ERRORS{"UNKNOWN"};
 } else {
    # now that we are using an ini file we need this module 
@@ -370,7 +441,7 @@ if ($the_arguments{'_bytefactor'}) {
 }
 my $actual_bytefactor=$the_arguments{'_bytefactor'} || $default_bytefactor;
 
-if ($opt_help) {
+if ($opt_help || $opt_texthelp) {
    usage();
 }
 
@@ -399,6 +470,12 @@ if (! $the_arguments{'_host'} && !$opt_inihelp) {
    short_usage();
 }
 
+# take a look at the username and if it is in the format USER@DOMAIN, change it to DOMAIN/USER
+if ($opt_username=~/^(.*?)\@(.*?)$/) {
+   $opt_username="$2/$1";
+   $debug && print "Username specified as USER\@DOMAIN, altering to DOMAIN/USER\n";
+}
+
 # take a copy of the original arguments
 %the_original_arguments=%the_arguments; # not really used at the moment
 
@@ -411,7 +488,7 @@ if (! $the_arguments{'_host'} && !$opt_inihelp) {
 my $running_within_nagios=$ENV{'NAGIOS_PLUGIN'} || '';
 
 if (! -x $wmic_command) {
-   print "This plugin requires the linux implementation of wmic eg from zenoss.\nOnce wmic is installed, configure its location by setting the \$wmic_command variable in this plugin.";
+   print "This plugin requires the linux implementation of wmic eg from zenoss.\nOnce wmic is installed, configure its location by setting the \$wmic_command variable in '$conf_file'.";
    exit $ERRORS{"UNKNOWN"};
 }
 
@@ -519,6 +596,106 @@ if ($wmi_ini_dir) {
 return $ini_file;
 }
 #-------------------------------------------------------------------------
+sub show_warn_crit_field_info {
+# shows consistent information about warn/crit fields for help modes
+# pass in
+# the ini file object
+# the ini file mode (actually the complete section name)
+my ($wmi_ini,$ini_mode)=@_;
+my $output='';
+my @test_fields_list=$wmi_ini->val($ini_mode,'test','');
+if ($test_fields_list[0] ne '') {
+   # show that the first field is the default
+   $test_fields_list[0].=" (Default)";
+   $output="\n   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: " . join(", ",@test_fields_list) . "\n";
+} else {
+   # need this to help keep man page indenting correct
+   $output="\n   WARN/CRIT  Not used for this MODE.\n";
+}
+return $output;
+}
+#-------------------------------------------------------------------------
+sub show_command_examples {
+# it might be open already but just open it again
+my $example_file="$wmi_ini_dir/$command_examples_ini_file";
+my $base_command="$0 -H $the_arguments{'_host'} -u $opt_username -p $opt_password";
+my $exe_dir=$0;
+$exe_dir=~s/^(.*)\/(.*?)$/$1\//;
+
+$debug && print "Base Command = $base_command\n";
+$debug && print "Opening Command Examples Ini File: $example_file\n";
+
+my %variables=();
+
+if ( open(EXAMPLE,$example_file) ) {
+   foreach my $line (<EXAMPLE>) {
+      chomp($line);
+      $debug && print "LINE: $line\n";
+      my $output=0;
+      if ($line=~/^#/) {
+         # ignore
+      } elsif ($line=~/^!Define:(.*?):(.*)$/) {
+         # a define line in the format !Define:Variable:Value
+         $variables{$1}=$2;
+         $debug && print "Definition: $1 = $2\n";
+      } elsif ($line=~/^!T(.*)$/) {
+         $output="<strong>$1</strong>";
+      } elsif ($line=~/^!A(.*)$/) {
+         # this is a command argument
+         $output="Command: <code>$base_command $1</code>\n";
+         
+         my $cmd_output=`$base_command $1`;
+         # remove final \n from commmand output
+         $cmd_output=~s/\n$//;
+         # highlight plugin display output and performance data output
+         # performance data is
+         # 1) between the first | and next \n
+         # 2) between the first | and end of line if no \n
+         # plugin display output is everything else
+         # by default enclose everything in blue font and then go and find the performance data
+         $cmd_output="<font color=$variables{'display'}>$cmd_output</font>";
+         
+         # if the $cmd_output contains a | followed by a \n then performance data is between | and \n
+         if ($cmd_output=~/\|(.*?)\n/) {
+            # close blue font and then start red
+            # restart red font after perfdata
+            $cmd_output=~s/\|(.*?)\n/<\/font>\|<font color=$variables{'perf'}>$1<\/font><font color=$variables{'display'}>/s;
+         } elsif ($cmd_output=~/\|(.*)$/) {
+            # performance data is everything after first |
+            # close blue font and then start red
+            $cmd_output=~s/\|(.*)$/<\/font>\|<font color=$variables{'perf'}>$1/s;
+         }
+         
+         # if there are any [Triggered ...] brackets change their colour too
+         if ($cmd_output=~/\[Triggered.*?\]/) {
+            # close the existing <font> and start a new one
+            $cmd_output=~s/(\[Triggered.*?\])/<\/font><font color=$variables{'trigger'}>$1<\/font><font color=$variables{'display'}>/gs;
+         }
+         
+         $output.="Output : <code>$cmd_output</code>";
+         
+         if (! $opt_z) {
+            # try and mask any user/password/host
+            $output=~s/-H\s*(\S*?)\s/-H HOST /;
+            $output=~s/-u\s*(\S*?)\s/-u USER /;
+            $output=~s/-p\s*(\S*?)\s/-p PASS /;
+            # also hide the full path of the command (to make the display smaller)
+            $output=~s/$exe_dir//;
+         }
+         
+      } else {
+         $output="$line";
+      }
+      
+      if ($output ne 0) {
+         print "$output\n";
+      }
+   }
+} else {
+   print "Warning - could not open $example_file\n";
+}
+}
+#-------------------------------------------------------------------------
 sub show_ini_help_overview {
 # show ini help sections
 # pass in
@@ -536,13 +713,8 @@ if (!$give_all_detail) {
 }
 
 print<<EOT;
-=====================
-=====================
-Ini File Help Summary
-=====================
-=====================
-The ini file and/or dir provides the following Modes and/or Submodes:
-$text_for_overview
+INI FILE HELP SUMMARY
+ The ini file and/or dir provides the following Modes and/or Submodes $text_for_overview
 EOT
 
 # if we are lucky the env variable COLUMNS has been set to the width of the terminal
@@ -559,38 +731,50 @@ foreach my $ini_mode (sort @ini_modes) {
 
       my $display='';
       if ($give_all_detail) {
-         my @test_fields_list=$wmi_ini->val($ini_mode,'test','');
+         # collect these next 2 values from the ini file
+         # defaults should be the same as that collected during check_ini
+         my $number_wmi_samples=$wmi_ini->val($ini_mode,'samples',$default_inifile_number_wmi_samples);
+         my $ini_delay=$wmi_ini->val($ini_mode,'delay',$default_inifile_delay);
+         
          # break up the ini_mode to MODE and SUBMODE and display them
          $ini_mode=~/^(\w+?)(\s+\w*?)*$/;
          my $inimode=$1 || '';
          my $inisubmode=$2 || '';
-         my $title="MODE=$inimode";
+         my $title="$inimode";
          my $extra_title="(-m $inimode";
          if ($inisubmode) {
             # remove any spaces at the start
             $inisubmode=~s/\s*//g;
-            $title.=", SUBMODE=$inisubmode";
+            $title.=", $inisubmode";
             $extra_title.=" -s $inisubmode";
          }
          $extra_title.=')';
-         # now add ======= under the title
-         my $underline='-' x length($title);
          # we used to have inihelp include the mode and submode in the actual text, so remove it if it is still there
          # remove everything up to the end of the first line of ========= and the \n
          $inihelp=~s/^(.*?)(==)(=*\n)(.*?)$/$4/s;
+         
+         # make sure each line in $inihelp starts with exactly 3 spaces to ensure proper formatting when shown as a manpage
+         $inihelp=~s/^(\s*)(.*?)$/   $2/mg;
 
          # check the required plugin version for this check
          my $requires_text='';
          my $requires_version=$wmi_ini->val($ini_mode,'requires',0);
          if ($VERSION < $requires_version) {
             # this is a problem
-            $requires_text="   ----- Requires plugin version>=$requires_version. Will not work with this version -----\n";
+            $requires_text="   ----- Requires plugin version>=$requires_version. Will not work with this version -----  \n";
          }
 
-         $display="$title $extra_title\n$underline\n$requires_text$inihelp\n";
-         if ($test_fields_list[0] ne '') {
-            $display.="\n   Valid Warning/Critical Fields are: " . join(", ",@test_fields_list) . "\n";
+         $display=" $title $extra_title  \n$requires_text$inihelp\n";
+         
+         # add automatic information about the DELAY parameter
+         if ($number_wmi_samples>1) {
+            $display.="\n   $default_help_text_delay Default is $ini_delay.\n";
+         } else {
+            # delay not required or meaningful for this MODE
          }
+         
+         $display.=show_warn_crit_field_info($wmi_ini,$ini_mode);
+         
       } else {
          # we like to format our inihelp with a line as the title then a line full of ========= and then the text
          # lets only show the text, by removing the first stuff if it exists
@@ -615,15 +799,26 @@ exit $ERRORS{'UNKNOWN'};
 sub short_usage {
 my ($no_exit)=@_;
 print <<EOT;
-Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-t TIMEOUT] [-y DELAY] [-x NODATAEXIT] [--nodata] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [-v OSVERSION]
+Typical Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-a ARG1 ] [-w WARN] [-c CRIT]
+Full Usage: -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [-v OSVERSION] [--help] [--itexthelp]
 EOT
 if (!$no_exit) {
-   print "Specify the --help parameter to view the complete help information\n";
+   print "Help as a Manpage: --help\nHelp as Text: --itexthelp\n";
    exit $ERRORS{'UNKNOWN'};
 }
 }
 #-------------------------------------------------------------------------
 sub usage {
+
+if ($opt_help) {  
+   if (-x $make_manpage_script) {
+      # we have the script to make the manpage and have not been asked to show text only help
+      exec ("$make_manpage_script \"$0 --itexthelp\" \"$manpage_dir\"") or print STDERR "couldn't exec $make_manpage_script: $!";
+   } else {
+      print "Warning: Can not access/execute Manpage script ($make_manpage_script).\nShowing help in text-only format.\n\n";
+   }
+}
+
 my $multiplier_list=join(', ',keys %multipliers);
 my $time_multiplier_list=join(', ',keys %time_multipliers);
 
@@ -657,237 +852,283 @@ foreach my $mode (keys %valid_test_fields) {
   
 }
 
-short_usage(1);
 my $ini_info='';
 if ($wmi_ini_file||$wmi_ini_dir) {
-   $ini_info="\nIni File Configured\n-------------------\nThere is an ini file/dir configured. These contain more checks.\n--inihelp on its own shows a one line summary of all MODES/SUBMODES contained within the ini files.\n--inihelp specified with a MODE/SUBMODE shows the help just for that mode.\nAll of the inihelp is also shown at the end of this help text.\n";
+   $ini_info="\nINI FILE SPECIFIED\n There is an ini file/dir configured. The ini files contain more checks. --inihelp on its own shows a one line summary of all MODES/SUBMODES contained within the ini files. --inihelp specified with a MODE/SUBMODE shows the help just for that mode. All of the inihelp is also shown at the end of this help text.\n\n";
 }
 
 print <<EOT;
+NAME
+ check_wmi_plus.pl - Client-less checking of Windows machines
+BRIEF
+ Typical Usage:  
+ 
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-a ARG1 ] [-w WARN] [-c CRIT]
 
-where 
-BYTEFACTOR is either 1000 or 1024 and is used for conversion units eg bytes to GB. Default is 1024.
-TIMEOUT is in seconds
-INIFILE is the full path of an ini file to use.
-INIDIR is the full path of an ini directory to use. The plugin reads files ending in .ini in INIDIR in the default directory order.
-   The INIFILE is read first, if defined, then each .ini file found in INIDIR. Ini files read later merge with earlier ini files.
-   For any settings that exist in one or more files, the last one read is set.
--d Enable debug. Use this to see a lot more of what is going on including the exact WMI Query and results. User/passwords
-   should be masked unless -z is specified.
--z Provide full specification warning and critical values for performance data. 
-   Not all performance data processing software can handle this eg PNP4Nagios
---nodata Controls how the plugin responds when no data is returned by the WMI query. Normally, the plugin returns an Unknown error.
-   If you specify this option then you can use WARN/CRIT checking on the _ItemCount field. This is only useful for some
-   check eg checkfilesize where you might get no data back from the WMI query.
-NODATAEXIT is the plugin result if the WMI Query returns no data. Ignored if -n is set.
-      Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown.
-      Only used for some checks. All checks from the ini file can use this.
-OSVERSION is used for some MODEs only, where we need to do something slightly different to accomodate different Windows versions.
-   It is documented with each mode. Valid versions are: 2000. More will be added as required.
+ Complete Usage:  
+ 
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-w WARN] [-c CRIT] [-b BYTEFACTOR] [-t TIMEOUT] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-y DELAY] [--namespace WMINAMESPACE] [--inihelp] [--inifile=INIFILE] [--inidir=INIDIR] [--nokeepstate] [--keepexpiry KEXPIRY] [--keepid KID] [-z] [-v OSVERSION] [-d] [--help] [--itexthelp]
+ 
+ Help as a Manpage:  
+ 
+ check_wmi_plus.pl --help
+ 
+ Help as Text:  
+ 
+ check_wmi_plus.pl --itexthelp (its very long!)
+ 
+DESCRIPTION
+ check_wmi_plus.pl is a client-less Nagios plugin for checking Windows systems.
+ No more need to install any software on any of your Windows machines. Check directly from your Nagios server.
+ Check WMI Plus uses the Windows Management Interface (WMI) to check for common services (cpu, disk, sevices, eventlog...) on Windows machines. It requires the open source wmi client for Linux (wmic).
 
-Keeping State
--------------
+ Besides the built in checks, Check WMI Plus functionality can be easily extended through the use of ini files. Check WMI Plus comes with several ini files, but you are free to add your own checks to your own ini file. 
+
+ For more information see the website www.edcint.co.nz/checkwmiplus
+
+REQUIRED OPTIONS
+ -H HOSTNAME  specify the name or IP Address of the host that you want to check
+ 
+ -u DOMAIN/USER  specify the DOMAIN (optional) and USER that has permission to execute WMI queries on HOSTNAME
+ 
+ -p PASSWORD  the PASSWORD for USER
+ 
+ -m MODE  the check mode. The list of valid MODEs and a description is shown below
+
+COMMONLY USED OPTIONS
+ -s SUBMODE  the submode. Some MODEs have one or more submodes. These are also described below.
+ 
+ -a ARG1  argument number 1. Its meaning depends on the MODE/SUBMODE combination.
+ 
+ -o ARG2  argument number 2. Its meaning depends on the MODE/SUBMODE combination.
+ 
+ -3 ARG3  argument number 3. Its meaning depends on the MODE/SUBMODE combination.
+ 
+ -4 ARG4  argument number 4. Its meaning depends on the MODE/SUBMODE combination.
+ 
+ -w WARN  specify warning criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a warning status (unless a critical status is also triggered). See below for how to specify warning criteria.
+
+ -c CRIT  specify critical criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a critical status. See below for how to specify warning criteria.
+
+LESS COMMONLY USED OPTIONS
+ -b BYTEFACTOR  BYTEFACTOR is either 1000 or 1024 and is used for conversion units eg bytes to GB. Default is 1024.
+
+ -t TIMEOUT  specify the number of seconds before the plugin will timeout. Some WMI queries take longer than others and network links with high latency may also require you to increase this from the default value of $TIMEOUT
+
+ --nodatamode  Controls how the plugin responds when no data is returned by the WMI query. Normally, the plugin returns an Unknown error. If you specify this option then you can use WARN/CRIT checking on the _ItemCount field. This is only useful for some checks eg checkfilesize where you might get no data back from the WMI query when the file is not found.
+
+ --nodataexit NODATAEXIT  specify the plugin status result if the WMI Query returns no data. Ignored if --nodatamode is set. Valid values are 0 for OK, 1 for Warning, 2 for Critical (Default) or 3 for Unknown. Only used for some checks. All checks from the ini file can use this.
+ 
+ --nodatastring NODATASTRING  specify the string that tha plugin will display if the WMI Query returns no data. Ignored if --nodatamode is set. Only used for some checks where the use of NODATAEXIT is valid. All checks from the ini file can use this.
+ 
+ -y DELAY  Specify the delay between 2 consecutive WMI queries that are run in a single call to the plugin. Defaults are set for certain checks. Only valid if --nokeepstate used.
+
+ --namespace WMINAMESPACE  Specify the WMI Namespace. eg root/MicrosoftDfs. The default is root/cimv2. Use '/' (forward slash) instead of '\\\\' (backslash).
+
+ --inihelp  Show the help from the INIFILE for the specified MODE/SUBMODE. If specified without MODE/SUBMODE, this shows a quick short summary of all valid MODE/SUBMODEs in the ini files.
+ 
+ --inifile=INIFILE  INIFILE is the full path of an ini file to use. The use of --inidir is preferred over this option.
+ 
+ --inidir=INIDIR  INIDIR is the full path of an ini directory to use. The plugin reads files ending in .ini in INIDIR in the default directory order. The INIFILE is read first, if defined, then each .ini file found in INIDIR. Ini files read later merge with earlier ini files. For any settings that exist in one or more files, the last one read is set.
+ 
+ --nokeepstate  disables the default mode of keeping state between plugin runs.
+ 
+ --keepexpiry KEXPIRY  KEXPIRY is the number of seconds after which the plugin assumes that the previously collected data has expired. The default is $opt_keep_state_expiry sec. You should run your plugin more frequently than this value or set KEXPIRY higher.
+ 
+ --keepid KID  KID is a unique identifier. This is normally not needed. In order to keep state between plugin runs, the data is written to a file. In order to stop collisions between different plugin runs, and hence incorrect calculations,  the filename is unique based on the checkmode, hostname, arguments passed etc. If for some reason these are not sufficient and you are experiencing collisions, you can add a unique KID to each plugin check to ensure uniqueness.
+ 
+ -z  Provide full specification warning and critical values for performance data. Not all performance data processing software can handle this eg PNP4Nagios.
+ 
+ -d  Enable debug. Use this to see a lot more of what is going on including the exact WMI Query and results. User/passwords should be masked in the resulting output unless -z is specified.
+
+KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc.
 
-Checks like this take 2 samples of WMI values (with a DELAY in between) and then calculate a result by differencing the values.
-By default, the plugin will "keepstate", which means that 1 WMI sample will be collected each time the plugin runs and it will
-calculate the difference using the values from the previous plugin run. For something like checkcpu, this means that the plugin
-gives you an average CPU utilisation between runs of the plugin. Even if you are 0% utilisation each time the plugin runs but
-100% in between, checkcpu will still report a very high utilisation percentage. This makes for a very accurate plugin result. 
-Another benefit of keeping state is that it results in fewer WMI queries and the plugin runs faster. If you disable keeping state,
-then, for these types of checks, the plugin reverts to taking 2 WMI samples with a DELAY each time it runs and works out the
-result then and there. This means that, for example, any CPU activity that happens between plugin runs is never detected. 
-There are some specific state keeping options:
---nokeepstate disables the default mode of keeping state between plugin runs.
---keepexpiry KEXPIRY where KEXPIRY is the number of seconds after which the plugin assumes that the previously collected data
-   has expired. The default is $opt_keep_state_expiry sec. You should run your plugin more frequently than this value or set
-   KEXPIRY higher.
---keepid KID where KID is a unique identifier. This is normally not needed. In order to keep state between plugin runs, the data
-   is written to a file. In order to stop collisions between different plugin runs, and hence incorrect calculations,  the filename
-   is unique based on the checkmode, hostname, arguments passed etc. If for some reason these are not sufficient and you are
-   experiencing collisions, you can add a unique KID to each plugin check to ensure uniqueness.
-The files used to keep state are stored in $tmp_dir. The DELAY setting is not applicable when keeping state is used.
-If you are "keeping state" then one of the first things shown in the plugin output is the sample period.
+Checks like this take 2 samples of WMI values (with a DELAY in between) and then calculate a result by differencing the values. By default, the plugin will "keepstate", which means that 1 WMI sample will be collected each time the plugin runs and it will calculate the difference using the values from the previous plugin run. For something like checkcpu, this means that the plugin gives you an average CPU utilisation between runs of the plugin. Even if you are 0% utilisation each time the plugin runs but 100% in between, checkcpu will still report a very high utilisation percentage. This makes for a very accurate plugin result. Another benefit of keeping state is that it results in fewer WMI queries and the plugin runs faster. If you disable keeping state, then, for these types of checks, the plugin reverts to taking 2 WMI samples with a DELAY each time it runs and works out the result then and there. This means that, for example, any CPU activity that happens between plugin runs is never detected.
+
+There are some specific state keeping options: 
+--nokeepstate, 
+--keepexpiry KEXPIRY, 
+--keepid KID, 
+
+The files used to keep state are stored in $tmp_dir. The DELAY setting is not applicable when keeping state is used. If you are "keeping state" then one of the first things shown in the plugin output is the sample period.
 
 $ini_info
-MODE=checkcpu
--------------
+
+BUILTIN MODES
+ The following modes are coded directly into the plugin itself and do not require any ini files to function.
+ 
+ Each mode describes the optional arguments and parameters valid for use with that MODE.
+ 
+ checkcpu  
    Some CPU checks just take whatever WMI or SNMP gives them from the precalculated values. We don't.
-   We use WMI Raw counters to calculate values over a given timeperiod. 
-   This is much more accurate than taking Formatted WMI values.
-   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
-      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
-      you may also need to use the -t parameter to set a longer script timeout.
-   WARN/CRIT can be used as described below.
+   We use WMI Raw counters to calculate values over a given timeperiod. This is much more accurate than taking Formatted WMI values.
+   $default_help_text_delay
+   WARN/CRIT  can be used as described below.
    $field_lists{'checkcpu'}.
 
-MODE=checkcpuq
---------------
+checkcpuq  
    The WMI implementation of CPU Queue length is a point value.
    We try and improve this slightly by performing several checks and averaging the values.
-   ARG1: (optional) specifies how many point checks are performed. Default 3.
-   DELAY: (optional) specifies the number of seconds between point checks. Default 1. It can be 0 but in reality there will always 
-      be some delay between checks as it takes time to perform the actual WMI query 
-   WARN/CRIT can be used as described below.
+   ARG1  (optional) specifies how many point checks are performed. Default 3.
+   DELAY  (optional) specifies the number of seconds between point checks. Default 1. It can be 0 but in reality there will always be some delay between checks as it takes time to perform the actual WMI query 
+   WARN/CRIT  can be used as described below.
       $field_lists{'checkcpuq'}.
    
    Note: Microsoft says "A sustained processor queue of greater than two threads generally indicates
    processor congestion.". However, we recommended testing your warning/critical levels to determine the
    optimal value for you.
    
-MODE=checkdrivesize
--------------------
-   ARG1: drive letter or volume name of the disk to check. If omitted or set to . all drives will be included.
+checkdrivesize  
+   ARG1  drive letter or volume name of the disk to check. If omitted or set to . all drives will be included.
       To include multiple drives separate them with a |. This uses a regular expression so take care to
       specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data"
-   ARG2: Set this to 1 to use volumes names (if they are defined) in plugin output and performance data ie -o 1
-   ARG3: Set this to 1 to include information about the sum of all disk space on the entire system.
+   ARG2  Set this to 1 to use volumes names (if they are defined) in plugin output and performance data ie -o 1
+   ARG3  Set this to 1 to include information about the sum of all disk space on the entire system.
       If you set this you can also check warn/crit against the overall disk space.
       To show only the overall disk, set ARG3 to 1 and set ARG2 to 1 (actually to any non-existant disk)
-   WARN/CRIT can be used as described below.
+   WARN/CRIT  can be used as described below.
       $field_lists{'checkdrivesize'}.
 
-MODE=checkeventlog
-------------------
-   ARG1: Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer".
+checkeventlog  
+   ARG1  Name of the log eg "System" or "Application" or any other Event log as shown in the Windows "Event Viewer".
       Default is system
-   ARG2: Severity Number, 2 = warning 1 = error. The plugin shows all severity levels less than and equal to the one chosen.
+   ARG2  Severity Number, 2 = warning 1 = error. The plugin shows all severity levels less than and equal to the one chosen.
       Default is 1.
-   ARG3: Number of past hours to check for events. Default is 1
-   ARG4: Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
+   ARG3  Number of past hours to check for events. Default is 1
+   ARG4  Comma delimited list of ini file sections to get extra settings from. Default value is eventdefault.
       ie use the eventdefault section settings from the ini file. The ini file contains regular expression based inclusion
       and exclusion rules to accurately define the events you want to or don't want to see. See the event.ini file for details.
-   WARN/CRIT can be used as described below.
+   WARN/CRIT   can be used as described below.
       $field_lists{'checkeventlog'}.
 
-   Examples:
-      to report all errors that got logged in the past 24 hours in the System event log use: 
+   Examples:  
+      to report all errors that got logged in the past 24 hours in the System event log use:
+      
       -a System -3 24
-      to report all warnings and errors that got logged in the past 4 hours in the Application event log use: 
+      
+      to report all warnings and errors that got logged in the past 4 hours in the Application event log use:
+      
       -a application -o 2 -3 4
-      to report your custom mix of event log messages from the system event log use: 
+      
+      to report your custom mix of event log messages from the system event log use:
+      
       -4 eventinc_1,eventinc_2,eventinc_3,eventexclude_1
 
-MODE=checkfileage
-----------------
-   ARG1: full path to the file. Use '/' (forward slash) instead of '\\' (backslash).
-   ARG2: set this to one of the time multipliers ($time_multiplier_list)
+checkfileage  
+   ARG1  full path to the file. Use '/' (forward slash) instead of '\\\\' (backslash).
+   ARG2  set this to one of the time multipliers ($time_multiplier_list)
       This becomes the display unit and the unit used in the performance data. Default is hr.
       -z can not be used for this mode.
-   WARN/CRIT can be used as described below.
+   WARN/CRIT  can be used as described below.
       $field_lists{'checkfileage'}
+      
       The warning/critical values should be specified in seconds. However you can use the time multipliers
-      ($time_multiplier_list) to make it easier to use 
+      ($time_multiplier_list) to make it easier to use
+      
       eg instead of putting -w 3600 you can use -w 1hr
+      
       eg instead of putting -w 5400 you can use -w 1.5hr
+      
       Typically you would specify something like -w 24: -c 48:
 
-MODE=checkfilesize
-------------------
-   ARG1: full path to the file. Use '/' (forward slash) instead of '\\' (backslash).
+checkfilesize  
+   ARG1  full path to the file. Use '/' (forward slash) instead of '\\\\' (backslash).
       eg "C:/pagefile.sys" or "C:/windows/winhlp32.exe"
-   NODATAEXIT can be set for this check.
-   WARN/CRIT can be used as described below.
-   If you specify --nodata then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
+   NODATAEXIT  can be set for this check.
+   WARN/CRIT  can be used as described below.
+   If you specify --nodatamode then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
       This allows you to control how the plugin responds to non-existant files.
       $field_lists{'checkfilesize'}.
 
-MODE=checkfoldersize
---------------------
+checkfoldersize  
    WARNING - This check can be slow and may timeout, especially if including subdirectories. 
       It can overload the Windows machine you are checking. Use with caution.
-   ARG1: full path to the folder. Use '/' (forward slash) instead of '\\' (backslash). eg "C:/Windows"
-   ARG4: Set this to s to include files from subdirectories eg -x s
-   NODATAEXIT can be set for this check.
-   WARN/CRIT can be used as described below.
-   If you specify --nodata then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
+   ARG1  full path to the folder. Use '/' (forward slash) instead of '\\\\' (backslash). eg "C:/Windows"
+   ARG4  Set this to s to include files from subdirectories eg -x s
+   NODATAEXIT  can be set for this check.
+   WARN/CRIT  can be used as described below.
+   If you specify --nodatamode then you can use WARN/CRIT checking on the _ItemCount. _ItemCount should only ever be 0 or 1.
       This allows you to control how the plugin responds to non-existant files.
       $field_lists{'checkfoldersize'}.
 
-MODE=checkmem
--------------
+checkmem  
    This mode checks the amount of physical RAM in the system.
-   WARN/CRIT can be used as described below.
+   WARN/CRIT  can be used as described below.
       $field_lists{'checkmem'}.
 
-MODE=checknetwork
------------------
+checknetwork  
    These network checks use WMI Raw counters to calculate values over a given timeperiod. 
    This is much more accurate than taking Formatted WMI values.
-   ARG1: Specify with network adapter the stats are collected for.
+   ARG1  Specify with network adapter the stats are collected for.
       The name of the network adaptors as seen from WMI are similar to what is seen in the output of the 
       ipconfig/all command on Windows. However, its not exactly the same. Run without -a to list the adapter
       names according to WMI. Typically you need to use '' around the adapter name when specifying.
       eg -a 'Intel[R] PRO_1000 T Server Adapter _2 - Packet Scheduler Miniport'
-   DELAY: (optional) specifies the number of seconds over which the utilisation is calculated. Default 5.
-      The longer you can make this without timing out, the more accurate it will be. if specifying longer values
-      you may also need to use the -t parameter to set a longer script timeout.
-   WARN/CRIT can be used as described below.
+   $default_help_text_delay
+   WARN/CRIT  can be used as described below.
       $field_lists{'checknetwork'}
-   BYTEFACTOR defaults to 1000 for this mode. You can override this if you wish.
+   BYTEFACTOR  defaults to 1000 for this mode. You can override this if you wish.
    
-MODE=checkpage
---------------
+checkpage  
    This mode checks the amount of page file usage.
    The total page file size varies between the Initial size and the Maximum Size you set in Windows.
-   ARG1: Set this to "auto" to automatically set warning/critical levels. The warning level is set to the same as the
+   ARG1  Set this to "auto" to automatically set warning/critical levels. The warning level is set to the same as the
       inital size of the page file. The critical level is set to 80% of the maximum page file size.
       If set, it is used instead of any command line specification of warning/critical settings.
       Note: The separate WMI query to obtain the additional information required to use this setting does not
       always work eg it does not work on our test Windows Server 2008 instance (it might on yours).
-   WARN/CRIT can be used as described below.
+   WARN/CRIT  can be used as described below.
    $field_lists{'checkpage'}.
 
-MODE=checkprocess
------------------
-   SUBMODE: Set this to Name, ExecutablePath, or Commandline to determine if ARG1 and ARG3 matches against just the
+checkprocess  
+   SUBMODE  Set this to Name, ExecutablePath, or Commandline to determine if ARG1 and ARG3 matches against just the
       process name (Default), the full path of the executable file, or the complete command line used to run the process.
-   ARG1: A regular expression to match against the process name, executable path or complete command line.
+   ARG1  A regular expression to match against the process name, executable path or complete command line.
       The matching processes are included in the resulting list. Use . alone to include all processes. Typically the process
            - Executable Path is like DRIVE:PATH/PROCESSNAME eg C:/WINDOWS/system32/svchost.exe,
            - Command Line is like DRIVE:PATH/PROCESSNAME PARAMETERS eg C:/WINDOWS/system32/svchost.exe -k LocalService
-         Use '/' (forward slash) instead of '\\' (backslash). eg "C:/Windows" or "C:/windows/system32"
+         Use '/' (forward slash) instead of '\\\\' (backslash). eg "C:/Windows" or "C:/windows/system32"
          Note: Any '/' in your regular expression will get converted to '\\\\'.
-   ARG2: Set this to 'Name' (Default), Executablepath or 'Commandline' to display the process names, executablepath or the 
+   ARG2  Set this to 'Name' (Default), Executablepath or 'Commandline' to display the process names, executablepath or the 
       whole command line.
-   ARG3: A regular expression to match against the process name, executable path or complete command line.
+   ARG3  A regular expression to match against the process name, executable path or complete command line.
       The matching processes are excluded from the resulting list. This exclusion list is applied after the inclusion list.
       
    For SUBMODE and ARG2 you only need to specify the minimum required to make it unique. Any of the following will work
    -s e, -s exe, -s c, -s com, -o e, -o exe, -o c, -o com
-   WARN/CRIT can be used as described below.
+   WARN/CRIT  can be used as described below.
       $field_lists{'checkprocess'}
    
-MODE=checkservice
------------------
-   ARG1: A regular expression that matches against the short or long service name that can be seen in the properties of the
+checkservice  
+   ARG1  A regular expression that matches against the short or long service name that can be seen in the properties of the
       service in Windows. The matching services are included in the resulting list. Use . alone to include all services.
       Use Auto to check that all automatically started services are OK.
-   ARG2: A regular expression that matches against the short or long service name that can be seen in the properties of the
+   ARG2  A regular expression that matches against the short or long service name that can be seen in the properties of the
       service in Windows. The matching services are excluded in the resulting list.
       This exclusion list is applied after the inclusion list.
-   WARN/CRIT can be used as described below.
+   WARN/CRIT  can be used as described below.
       $field_lists{'checkservice'}
 
-MODE=checkuptime
-----------------
-   WARN/CRIT can be used as described below.
+checkuptime  
+   WARN/CRIT  can be used as described below.
       $field_lists{'checkuptime'}
-      The warning/critical values should be specified in seconds. However you can use the time multipliers
-      ($time_multiplier_list) to make it easier to use 
+      
+      The warning/critical values should be specified in seconds. However you can use the time multipliers ($time_multiplier_list) to make it easier to use.
+      
       eg instead of putting -w 1800 you can use -w 30min
+      
       eg instead of putting -w 5400 you can use -w 1.5hr
-      Typically you would specify something like -w 10min: -c 20min:
+      
+      Typically you would specify something like -w 20min: -c 10min: (to if less than 20 min and critical if less than 10 min)
 
-MODE=checkwsusserver
---------------------
+checkwsusserver  
    If there are any WSUS related errors in the event log in the last 24 hours a CRITICAL state is returned.
    This mode has been removed. You can perform the same check that this used to perform by using MODE=checkeventlog 
    using the wsusevents ini section. The command line parameters are:
    -m checkeventlog -o 2 -3 24 -4 wsusevents -c 0
 
-WARNING and CRITICAL Specification:
-===================================
+WARNING AND CRITICAL SPECIFICATION
 
 If warning or critical specifications are not provided then no checking is done and the check simply returns the value and any related performance data. If they are specified then they should be formatted as shown below.
 
@@ -895,12 +1136,17 @@ A range is defined as a start and end point (inclusive) on a numeric scale (poss
 
 Multiple warning or critical specifications can be specified. This allows for quite complex range checking and/or checking against multiple FIELDS (see below) at one time. The warning/critical is triggered if ANY of the warning/critical specifications are triggered.
 
-If a ini file check returns multiple rows eg checkio logical, criteria are applied to ALL rows and any ONE row meeting the criteria will cause a trigger. If the check has been defined properly it will show which row/instance trigger the criteria as well as the overall result.
+If a ini file check returns multiple rows eg checkio logical, criteria are applied to ALL rows and any ONE row meeting the criteria will cause a trigger. If the check has been defined properly it will show which row/instance triggered the criteria as well as the overall result.
 
 This is the generalised format for ranges:
 FIELD=[@]start:end
 
-Notes:
+The convention used for field names in this plugin is as follows:
+   - FIELDs that start with _ eg _Used% are calculated or derived values
+   - FIELDs that are all lower case are command line arguments eg _arg1
+   - Other FIELDs eg PacketsSentPersec are what is returned from the WMI Query
+
+ NOTES
    1. FIELD describes which value the specification is compared against. It is optional (the default is dependent on the MODE).
    2. start <= end
    3. start and ":" is not required if start=0
@@ -914,38 +1160,33 @@ Notes:
       eg 1G for 1 x 10^9 or 2.5k for 2500
       eg 1wk for 1 week, 3.5day for 3.5 days etc
 
-FIELDs that start with _ eg _Used% are calculated or derived values
-FIELDs that are all lower case are command line arguments eg _arg1
-Other FIELDs eg PacketsSentPersec are what is returned from the WMI Query
+ EXAMPLE RANGES
+ This table lists example WARN/CRIT criteria and when they will trigger an alert.
+ 10                      < 0 or > 10, (outside the range of {0 .. 10})
+ 10:                     < 10, (outside {10 .. 8})
+ ~:10                    > 10, (outside the range of {-infinity .. 10})
+ 10:20                   < 10 or > 20, (outside the range of {10 .. 20})
+ \@10:20                  = 10 and = 20, (inside the range of {10 .. 20})
+ 10                      < 0 or > 10, (outside the range of {0 .. 10})
+ 10G                     < 0 or > 10G, (outside the range of {0 .. 10G})
 
+ EXAMPLES WITH FIELDS
+ for MODE=checkdrivesize:
+ _UsedGB=10G             Check if the _UsedGB field is < 0 or > 10G, (outside the range of {0 .. 10G}) 
+ 10                      Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}), since _Used% is the default
+ _Used%=10               Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}) 
 
-Example ranges:
-
-WARN/CRIT definition    Generate an alert if x...
-10                      < 0 or > 10, (outside the range of {0 .. 10})
-10:                     < 10, (outside {10 .. 8})
-~:10                    > 10, (outside the range of {-infinity .. 10})
-10:20                   < 10 or > 20, (outside the range of {10 .. 20})
-\@10:20                  = 10 and = 20, (inside the range of {10 .. 20})
-10                      < 0 or > 10, (outside the range of {0 .. 10})
-10G                     < 0 or > 10G, (outside the range of {0 .. 10G})
-
-FIELD examples - for MODE=checkdrivesize:
-_UsedGB=10G             Check if the _UsedGB field is < 0 or > 10G, (outside the range of {0 .. 10G}) 
-10                      Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}), since _Used% is the default
-_Used%=10               Check if the _Used% field is < 0 or > 10, (outside the range of {0 .. 10}) 
-
-FIELD examples with multiple specifications - for MODE=checkdrivesize:
-eg -w _UsedGB=10G   -w 15   -w _Free%=5:  -c _UsedGB=20G   -c _Used%=25
-This will generate a warning if 
-   - the Used GB on the drive is more than 10G or 
-   - the used % of the drive is more than 15% or
-   - the free % of the drive is less than 5%
-This will generate a critical if 
-   - the Used GB on the drive is more than 20G or 
-   - the used % of the drive is more than 25%
-
-WARN and/or CRIT are not used for the following MODES: $modelist
+ EXAMPLES WITH MULITPLE SPECIFICATIONS
+ for MODE=checkdrivesize:
+ -w _UsedGB=10G -w 15 -w _Free%=5: -c _UsedGB=20G -c _Used%=25  
+ This will generate a warning if 
+    - the Used GB on the drive is more than 10G or 
+    - the used % of the drive is more than 15% or
+    - the free % of the drive is less than 5%
+ 
+ This will generate a critical if 
+    - the Used GB on the drive is more than 20G or 
+    - the used % of the drive is more than 25%
 
 EOT
 
@@ -990,7 +1231,7 @@ sub scaled_bytes {
 my ($incoming)=@_;
 if ($incoming ne '' && looks_like_number($incoming)) {
    (sort { length $a <=> length $b }
-   map { sprintf '%.3g%s', $incoming/$actual_bytefactor**$_->[1], $_->[0] }
+   map { sprintf '%.3f%s', $incoming/$actual_bytefactor**$_->[1], $_->[0] }
    [""=>0],[K=>1],[M=>2],[G=>3],[T=>4],[P=>5],[E=>6])[0]
 } else {
    return $incoming;
@@ -1046,8 +1287,9 @@ if ($$specified_delay) {
 # this is how we pass command line arguments into the query
 $wmi_query=~s/\{(.*?)\}/$the_arguments{$1}/g;
 
-# we also need to make sure that any ' in the query are escaped
-$wmi_query=~s/'/\\'/g;
+# we also need to make sure that any ' in the query are converted to "
+$wmi_query=~s/'/\"/g;
+#$wmi_query=~s/'/\\'/g; # we used to escape the '
 
 if ($slash_conversion) {
    # replace any / in the WMI query \\ since \ are difficult to use in linux on the command line
@@ -1064,7 +1306,8 @@ my $alt_delim='';
 if ($wmic_delimiter ne '|') {
    $alt_delim=" --delimiter='$wmic_delimiter'";
 }
-$wmi_commandline = "$wmic_command$alt_delim -U ${opt_username}%${opt_password} //$the_arguments{'_host'} '$wmi_query'";
+
+$wmi_commandline = "$wmic_command$alt_delim --namespace $opt_wminamespace -U ${opt_username}%${opt_password} //$the_arguments{'_host'} '$wmi_query'";
 
 my $all_output=''; # this holds information if any errors are encountered
 
@@ -1666,15 +1909,16 @@ sub no_data_check {
 # pass in
 # the number of items returned in the WMI query ie the value of _ItemCount
 my ($itemcount)=@_;
-if ($the_arguments{'_nodata'}) {
-   # this means that the users wants to test filecount using warn/crit criteria 
+if ($the_arguments{'_nodatamode'}) {
+   # this means that the users wants to test eg ItemCount using warn/crit criteria 
    # so we will not do our default behaviour
    # default behaviour is to go warning/critical if the $itemcount==0 ie no data was returned
    # this might mean that some other values might not be initialised so you will need to initialise them within each check before you call this sub eg for checkfilesize the value of FileSize will not get set if we do not find the file
 } else {
-   # we have to go warning/critical if the file does not exist
+   # we have to go warning/critical if there is not data returned by the WMI query
    if ($itemcount eq '0') {
-      print "WMI Query returned no data. The item you were looking for may NOT exist.\n";
+      # if there is a custom string defined then use that
+      print $the_arguments{'_nodatastring'};
       # we exit with the value the user specified in $the_arguments{'_nodataexit'}, if any
       if ($the_arguments{'_nodataexit'} ge 0 && $the_arguments{'_nodataexit'} le 3) {
          $debug && print "Exit with user defined exit code $the_arguments{'_nodataexit'}\n";
@@ -1974,6 +2218,29 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    }
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[0][$which_row]{$newfield}=$final_result;
+} elsif ($function eq 'KBtoB') {
+   # converts a number of kilo bytes to bytes - then we can use our standard scaling routine on the number for a niver display
+   # BYTEFACTOR is used in this calculation
+   # it requires one completed WMI query
+   # the parameters for this "function" are
+   # SOURCEFIELD1,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD1 [0] is a number of KB
+   # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
+   #
+   my $final_result='CALC_FAIL';
+   # this function requires only 1 WMI data result set. don't worry about checking it
+   my @parameter=split(',',$function_parameters);
+   if (looks_like_number($$wmidata[0][$which_row]{$parameter[0]})) {
+      $debug && print "Core Calc: $$wmidata[0][$which_row]{$parameter[0]}*$actual_bytefactor = ";
+      $final_result=$$wmidata[0][$which_row]{$parameter[0]}*$actual_bytefactor;
+      $debug && print " $final_result\n";
+      if ($parameter[1]) {
+         $final_result=sprintf($parameter[1],$final_result);
+      }
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[0][$which_row]{$newfield}=$final_result;
 } elsif ($function eq 'test') {
    # it requires one completed WMI queries 
    # the parameters for this "function" are
@@ -2025,25 +2292,27 @@ if ($process_each_row eq '0') {
    $num_rows_in_query=0;
 }
 
+$debug && print "customfield definitions in this section: " . Dumper($list);
 foreach my $item (@{$list}) {
    $debug && print "Creating Custom Field for $item\n";
-   # the format of this field is
-   # NEWFIELDNAME,FUNCTION,FUNCTIONPARAMETERS
-   # where FUNCTIONPARAMETERS itself is a comma delimited list
-   # we want to split it into the 3 fields
-   if ($item=~/(.*?),(.*?),(.*)/) {
-      # $1 is the NEWFIELDNAME
-      # $2 is the FUNCTION
-      # $3 is the FUNCTIONPARAMETERS
-      
-      # look at query number 0 and then process each row in that query
-      for (my $i=0;$i<=$num_rows_in_query;$i++) {
-         calc_new_field($1,$2,$3,$wmidata,$i);
+   if ($item ne '') {
+      # the format of this field is
+      # NEWFIELDNAME,FUNCTION,FUNCTIONPARAMETERS
+      # where FUNCTIONPARAMETERS itself is a comma delimited list
+      # we want to split it into the 3 fields
+      if ($item=~/(.*?),(.*?),(.*)/) {
+         # $1 is the NEWFIELDNAME
+         # $2 is the FUNCTION
+         # $3 is the FUNCTIONPARAMETERS
+         
+         # look at query number 0 and then process each row in that query
+         for (my $i=0;$i<=$num_rows_in_query;$i++) {
+            calc_new_field($1,$2,$3,$wmidata,$i);
+         }
+      } else {
+         print "WARNING: Could not correctly parse \"customfield\" definition in ini file: $item (for $opt_mode)\n";
       }
-   } else {
-      print "WARNING: Could not correctly parse ini customfield: $item (for $opt_mode)\n";
    }
-   
 }
 }
 #-------------------------------------------------------------------------
@@ -2054,27 +2323,29 @@ sub process_custom_lists {
 # the wmi data array @collected_data
 my ($list,$wmidata)=@_;
 
+$debug && print "createlist definitions in this section: " . Dumper($list);
 foreach my $item (@{$list}) {
-   $debug && print "Creating Custom List for $item\n";
-   # the format of this field is
-   #      1           2         3         4          5
-   # NEWFIELDNAME|LINEDELIM|FIELDDELIM|UNIQUE|FIELD1,FIELD2,etc
-   # we want to split it into the fields
-   if ($item=~/^(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)$/) {
-      # $5 must be turned into an array
-      my $newfield=$1;
-      my $linedelim=$2;
-      my $fielddelim=$3;
-      my $unique=$4;
-      my $sourcefields=$5;
-      my @fieldlist=split(',',$sourcefields);
-      #print "$newfield,$linedelim,$fielddelim,$unique and $sourcefields=" . Dumper(\@fieldlist);
-      $$wmidata[0][0]{$newfield}=list_collected_values_from_all_rows($wmidata,\@fieldlist,$linedelim,$fielddelim,$unique);
-      #print "   Set to: $$wmidata[0][0]{$newfield}\n";
-   } else {
-      print "WARNING: Could not correctly parse ini createlist: $item (for $opt_mode)\n";
+   if ($item ne '') {
+      $debug && print "Creating Custom List for $item\n";
+      # the format of this field is
+      #      1           2         3         4          5
+      # NEWFIELDNAME|LINEDELIM|FIELDDELIM|UNIQUE|FIELD1,FIELD2,etc
+      # we want to split it into the fields
+      if ($item=~/^(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)$/) {
+         # $5 must be turned into an array
+         my $newfield=$1;
+         my $linedelim=$2;
+         my $fielddelim=$3;
+         my $unique=$4;
+         my $sourcefields=$5;
+         my @fieldlist=split(',',$sourcefields);
+         #print "$newfield,$linedelim,$fielddelim,$unique and $sourcefields=" . Dumper(\@fieldlist);
+         $$wmidata[0][0]{$newfield}=list_collected_values_from_all_rows($wmidata,\@fieldlist,$linedelim,$fielddelim,$unique);
+         #print "   Set to: $$wmidata[0][0]{$newfield}\n";
+      } else {
+         print "WARNING: Could not correctly parse \"createlist\" definition in ini file: $item (for $opt_mode)\n";
+      }
    }
-   
 }
 }
 #-------------------------------------------------------------------------
@@ -2103,7 +2374,12 @@ if ($data_errors) {
    if ($data_errors=~/access denied/i) {
       print " You might have your username/password wrong or the user's access level is too low. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/Retrieve result data/i) {
-      print " The target host ($the_arguments{_host}) might not have the required WMI classes installed. This can happen, for example, if you are trying to checkiis but IIS is not installed. It can also happen if your version of Windows does not support this check. Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Wmic error text on the next line.\n";
+      print " The target host ($the_arguments{_host}) might not have the required WMI classes installed. This can happen, for example, if you are trying to checkiis but IIS is not installed. It can also happen if your version of Windows does not support this check. Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/0x8004100e/i) { 
+      # this error message looks like
+      # ERROR: Login to remote object.
+      # NTSTATUS: NT code 0x8004100e - NT code 0x8004100e
+      print " The target host ($the_arguments{_host}) might not have the required WMI namespace. This can happen if you are trying to run a check that is only supported on newer versions of Windows eg checkpower only works on Server 2008 and above - the entire namespace required for that check is missing in older versions of Windows. Other causes include mistyping the WMI namesspace. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_IO_TIMEOUT/i) {
       print " The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Is $the_arguments{_host} the correct hostname?. The host might even by up but just too busy. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_HOST_UNREACHABLE/i) {
@@ -2174,7 +2450,7 @@ if ($query) {
             print "\n$inihelp\n";
          }
          print "\n";
-         print "Valid Warning/Critical Fields are: " . join(", ",@test_fields_list) . "\n";
+         print show_warn_crit_field_info($wmi_ini,$ini_section);
          exit;
       }
       
@@ -2182,11 +2458,11 @@ if ($query) {
       my $custom_data_regex=$wmi_ini->val($ini_section,'dataregex','');
       
       # see how many samples to get
-      my $number_wmi_samples=$wmi_ini->val($ini_section,'samples',1); # default is 1
+      my $number_wmi_samples=$wmi_ini->val($ini_section,'samples',$default_inifile_number_wmi_samples);
       
       # see what delay to use
       # the setting in the ini file defines the default delay
-      my $ini_delay=$wmi_ini->val($ini_section,'delay',5); # default is 5
+      my $ini_delay=$wmi_ini->val($ini_section,'delay',$default_inifile_delay); 
       if ($the_arguments{'_delay'} eq '') {
          $the_arguments{'_delay'}=$ini_delay;
       }
@@ -2205,6 +2481,13 @@ if ($query) {
          $opt_keep_state=0;
       }
 
+      # set the namespace 
+      my $ini_namespace=$wmi_ini->val($ini_section,'namespace',$opt_wminamespace); 
+      if ($ini_namespace) {
+         # if the namespace is set in the ini file, set the command line option to that value so that it gets used by the query
+         $opt_wminamespace=$ini_namespace;
+      }
+
       my @collected_data;
       my $data_errors=get_multiple_wmi_samples($number_wmi_samples,$query,
          $custom_header_regex,$custom_data_regex,\@collected_data,\$the_arguments{'_delay'},\@calc_array,$wmi_ini->val($ini_section,'slashconversion',''));
@@ -2217,12 +2500,12 @@ if ($query) {
       no_data_check($collected_data[0][0]{'_ItemCount'});
       
       # calculate custom fields, if any defined
-      my @customfield_fields_list=$wmi_ini->val($ini_section,'customfield',undef);
+      my @customfield_fields_list=$wmi_ini->val($ini_section,'customfield','');
       process_custom_fields_list(\@customfield_fields_list,\@collected_data,$process_each_row);
       
       # process any list specifications
       # calculate custom list fields, if any defined
-      my @customlists_list=$wmi_ini->val($ini_section,'createlist',undef);
+      my @customlists_list=$wmi_ini->val($ini_section,'createlist','');
       process_custom_lists(\@customlists_list,\@collected_data);
 
       my $overall_display_info='';
@@ -2440,7 +2723,7 @@ return %lookup_results;
 #use Net::DNS;
 #
 ## decide if the _host parameter is a hostname or an IP Address
-#my $request_type='hostname';
+#my $request_type='Hostname';
 #my $is_hostname=1;
 #if ($the_arguments{'_host'}=~/^[0-9\.]+$/) {
 #   $request_type='IP Address';
@@ -2879,9 +3162,11 @@ my @new_data=();
 #   @{$collected_data[0]}=\%hash;
 #   print Dumper(\@collected_data);
 # the no data check will exit the plugin if no data is returned and print a message about it
-# if the user has used --nodata then it will still get the error if no data is returned
+# if the user has used --nodatamode then it will still get the error if no data is returned
 # but we never told them they could do that .....
-no_data_check($collected_data[0][0]{'_ItemCount'});
+no_data_check($collected_data[0][0]{'_ItemCount'}); # this seems pointless since we should always return a list of processes - unless there is an error, in which case, it should get stopped above
+
+my $num_excluded=0;
 
 foreach my $row (@{$collected_data[0]}) {
    # there are still some cases where the query seems to come back ok but have malformed data or something - lets try testing defined()
@@ -2893,6 +3178,7 @@ foreach my $row (@{$collected_data[0]}) {
             # exclusion regex defined, decide if we want this row
             if ($$row{$query_field}=~/$process_exclude_regex/i) {
                # regex matches so exclude this row
+               $num_excluded++;
                $debug && print "---> Excluding \"$$row{$query_field}\"\n";
                $process_this_row=0;
             }
@@ -2911,6 +3197,7 @@ foreach my $row (@{$collected_data[0]}) {
 $collected_data[0]=\@new_data;
 # update the count
 $collected_data[0][0]{'_ItemCount'}=$#new_data+1;
+$collected_data[0][0]{'_NumExcluded'}=$num_excluded;
 $debug && print "Including only the following processes " . Dumper(\@collected_data);
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[0][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
@@ -2963,6 +3250,7 @@ my $result_text='';
 # now loop through the results, showing the ones requested
 my $num_ok=0;
 my $num_bad=0;
+my $num_excluded=0;
 # so we want to loop through all the rows in the first query result $collected_data[0]
 foreach my $row (@{$collected_data[0]}) {
    # in the middle of the WMI output there are lines like:
@@ -2980,6 +3268,7 @@ foreach my $row (@{$collected_data[0]}) {
             # exclusion regex defined, decide if we want this row
             if ($$row{'DisplayName'}=~/$the_arguments{'_arg2'}/i || $$row{'Name'}=~/$the_arguments{'_arg2'}/i) {
                # regex matches so exclude this row
+               $num_excluded++;
                $debug && print "---> Excluding \"$$row{'DisplayName'}\" ($$row{'Name'})\n";
                $process_this_row=0;
             }
@@ -3007,6 +3296,7 @@ $result_text=~s/, $/./;
 # load some values to check warn/crit against
 $collected_data[0][0]{'_NumGood'}=$num_ok;
 $collected_data[0][0]{'_NumBad'}=$num_bad;
+$collected_data[0][0]{'_NumExcluded'}=$num_excluded;
 $collected_data[0][0]{'_Total'}=$num_ok+$num_bad;
 $collected_data[0][0]{'_ServiceList'}=$result_text;
 
