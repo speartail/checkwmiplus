@@ -19,15 +19,6 @@ mkdir -p "$manpage_dir/man1"
 # the full path to the manpage file
 manfile="$manpage_dir/man1/check_wmi_plus.1"
 
-# if we are not running in a terminal then only show the text-based help
-if [ ! -t 0 ]; then
-   # we are not running in a terminal
-   echo "Not running in a terminal - showing text-based help"
-   echo
-   exec $check_wmi_plus_text_help
-fi
-
-
 usage()
 {
 cat << EOT
