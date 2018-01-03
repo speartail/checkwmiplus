@@ -41,7 +41,7 @@ my $conf_file='/opt/nagios/bin/plugins/check_wmi_plus.conf';
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-my $VERSION="1.51";
+my $VERSION="1.52";
 
 # we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
 use lib "/usr/lib/nagios/plugins";
@@ -110,6 +110,7 @@ my $wmic_split_delimiter='\|';
 # key is the full name of the Module Version variable
 # value is the minimum module version we'd like to use
 my %good_module_versions=(
+   ']',5.01,
    'DateTime::VERSION',0.66,
    'Getopt::Long::VERSION',2.38,
    'Scalar::Util::VERSION',1.22,
@@ -446,7 +447,6 @@ if ($debug) {
       $wmic_split_delimiter='!';
       print "======================================== SYSTEM INFO =====================================================\n";
       print "--------------------- Module Versions ---------------------\n";
-      print "Perl Version: $]\n";
       check_module_versions(1);
       print "Net::DNS - $Net::DNS::VERSION\n";
       print "--------------------- Environment ---------------------\n";
@@ -645,6 +645,9 @@ if (!$versions_ok || $force_show) {
       }
       my $module_name=$moduleversion;
       $module_name=~s/::VERSION$//;
+      if ($module_name eq ']') {
+         $module_name='Perl Version';
+      }
       printf("%-19s %19s %7s %10s\n",$module_name,$$moduleversion,$status,$good_module_versions{$moduleversion});
    }
 }
@@ -1483,7 +1486,7 @@ if ($$specified_delay) {
 }
 
 # check the WMI namespace and set default if needed
-if ($wmi_namespace || '' eq '') {
+if ($wmi_namespace eq '') {
    $wmi_namespace='root/cimv2';
 }
 
@@ -2243,6 +2246,13 @@ my ($newfield,$function,$function_parameters,$wmidata,$query_index,$which_row)=@
 # these functions are often used on WMI data from a "Win32_PerfRawData" class
 $debug && print "Creating '$newfield' (WMIQuery:$query_index, Row:$which_row) using '$function' (Parameters: $function_parameters)\n";
 
+# any of the function parameters may contain "variables" where we substitute argument into
+# a variables looks like {SOMENAME}
+# if we find one of these we substitute values from the hash %the_arguments
+# eg {arg1} gets replaced by the value held in $the_arguments{'_arg1'}
+# this is how we pass command line arguments into the calculations
+$function_parameters=~s/\{(.*?)\}/$the_arguments{$1}/g;
+
 # wrap all the calcs in an eval to catch any divide by zero errors, bit bit nicer than just dying
 eval {
 
@@ -2442,8 +2452,8 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # the parameters for this "function" are
    # SOURCEFIELD1,SOURCEFIELD2,SPRINTF_SPEC
    # where 
-   # SOURCEFIELD1 [0] is some number
-   # SOURCEFIELD2 [1] is some number
+   # SOURCEFIELD1 [0] is a WMI field name which contains some number
+   # SOURCEFIELD2 [1] is a WMI field name which contains some number
    # SPRINTF_SPEC [2] - a format specification passed directly to sprintf to format the result (can leave blank)
    # INVERT [3] take the resulting value away from this number. Useful in the following example eg set this value to 100 to show busy percentage where counter value is an idle percentage.
    # Formula is 100 * SOURCEFIELD1/SOURCEFIELD2
@@ -2460,6 +2470,51 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       }
       if ($parameter[2]) {
          $final_result=sprintf($parameter[2],$final_result);
+      }
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
+} elsif ($function eq 'basicmaths') {
+   # it requires one completed WMI queries 
+   # the parameters for this "function" are
+   # SOURCEFIELD1,OPERATOR,SOURCEFIELD2,SPRINTF_SPEC
+   # where 
+   # SOURCEFIELD1 [0] is a WMI field name which contains some number or just a number 
+   # OPERATOR     [1] is one of + - * /
+   # SOURCEFIELD2 [2] is a WMI field name which contains some number or just a number 
+   # SPRINTF_SPEC [3] - a format specification passed directly to sprintf to format the result (can leave blank)
+   # Formula is SOURCEFIELD1 OPERATOR SOURCEFIELD2
+   # eg 2 * 3
+   #
+   my $final_result='CALC_FAIL';
+   # this function requires only 1 WMI data result set. don't worry about checking it
+   my @parameter=split(',',$function_parameters);
+
+   my $first_value=$parameter[0];
+   my $second_value=$parameter[2];
+   if (!looks_like_number($first_value)) {
+      # assume it is actually a WMI field name and so use the value in the field
+      $first_value=$$wmidata[$query_index][$which_row]{$parameter[0]};
+   }
+   if (!looks_like_number($second_value)) {
+      # assume it is actually a WMI field name and so use the value in the field
+      $second_value=$$wmidata[$query_index][$which_row]{$parameter[2]};
+   }
+   
+   if (looks_like_number($first_value) && looks_like_number($second_value)) {
+      $debug && print "Core Calc: $first_value $parameter[1] $second_value = ";
+      if ($parameter[1] eq '+') {
+         $final_result=$first_value + $second_value;
+      } elsif ($parameter[1] eq '-') {
+         $final_result=$first_value - $second_value;
+      } elsif ($parameter[1] eq '*') {
+         $final_result=$first_value * $second_value;
+      } elsif ($parameter[1] eq '/' && $second_value != 0) {
+         $final_result=$first_value / $second_value;
+      }
+      $debug && print " $final_result\n";
+      if ($parameter[3]) {
+         $final_result=sprintf($parameter[3],$final_result);
       }
    }
    $debug && print "   Setting $newfield to $final_result\n";
@@ -4811,7 +4866,7 @@ for (my $query_number=$last_wmi_data_index;$query_number<=$last_wmi_data_index;$
          # first hash  $$base_array[$query_number][$row_num]
          # second hash $$results[$join_last_wmi_data_index][$extra_row]
          # loop through the second hash and add the key/value to the first one if the key does not exist already
-         foreach my $key (keys $$results[$join_last_wmi_data_index][$extra_row]) {
+         foreach my $key (keys %{$$results[$join_last_wmi_data_index][$extra_row]}) {
             if (!exists($$base_array[$query_number][$row_num]{$key})) {
                # does not exist so add it
                $$base_array[$query_number][$row_num]{$key}=$$results[$join_last_wmi_data_index][$extra_row]{$key};

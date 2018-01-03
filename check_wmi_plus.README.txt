@@ -1,4 +1,4 @@
-check_wmi_plus v1.51
+check_wmi_plus v1.52
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
