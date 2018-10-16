@@ -43,7 +43,7 @@ use lib "/usr/lib64/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.63;
+our $VERSION=1.64;
 
 # which version of PRO (if used does this require)
 our $requires_PRO_VERSION=1.28;
@@ -481,18 +481,18 @@ our %performance_data_fields = (
    # In DISPLAY/UNITS anything enclosed in {} will be substituted by the value of that item of that name eg {DeviceID} will replace by the value contained in DeviceID eg C:
    checkcpu          => [ '_AvgCPU|%|Avg CPU Utilisation' ],
    checkcpuq         => [ '_AvgCPUQLen||Avg CPU Queue Length' ],
-   checkdrivesize    => [ '_UsedSpace|B|{DiskDisplayName} Space', '_Used%|%|{DiskDisplayName} Utilisation' ],
+   checkdrivesize    => [ '_UsedSpace|B|{DiskDisplayName} Space', '_Used%|%|{DiskDisplayName} Utilisation', 'Size|B|{DiskDisplayName} Size' ],
    checkeventlog     => [ '_ItemCount||Event Count' ],
    checkfileage      => [ '_DisplayFileAge|{_PerfDataUnit}|{_arg1} Age' ],
-   checkfilesize     => [ 'FileSize|bytes|{_arg1} Size', '_ItemCount||File Count' ],
-   checkfoldersize   => [ '_FolderSize|bytes|{_arg1} Size', '_ItemCount||File Count' ],
+   checkfilesize     => [ 'FileSize|B|{_arg1} Size', '_ItemCount||File Count' ],
+   checkfoldersize   => [ '_FolderSize|B|{_arg1} Size', '_ItemCount||File Count' ],
    checkgeneric      => [ 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ],
    checkgroup        => [ '_ItemCount||Group Count' ],
    checkgroupuser    => [ '_ItemCount||Group User Count' ],
    checklogon        => [ '_ItemCount||Logon Count' ],
-   checkmem          => [ '_MemUsed|Bytes|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ], 
+   checkmem          => [ '_MemUsed|B|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ], 
    checknetwork      => [ '_BytesSentPersec||{_DisplayName} BytesSentPersec', '_SendBytesUtilisation|%|{_DisplayName} Send Utilisation', '_BytesReceivedPersec||{_DisplayName} BytesReceivedPersec', '_ReceiveBytesUtilisation|%|{_DisplayName} Receive Utilisation', '_PacketsSentPersec||{_DisplayName} PacketsSentPersec', '_PacketsReceivedPersec||{_DisplayName} PacketsReceivedPersec', 'OutputQueueLength||{_DisplayName} OutputQueueLength', 'PacketsReceivedErrors||{_DisplayName} PacketsReceivedErrors' ],
-   checkpage         => [ '_Total|Bytes|{Name} Page File Size', '_Used|Bytes|{Name} Used', '_Used%|%|{Name} Utilisation', '_PeakUsed|Bytes|{Name} Peak Used', '_PeakUsed%|%|{Name} Peak Utilisation' ], 
+   checkpage         => [ '_Total|B|{Name} Page File Size', '_Used|B|{Name} Used', '_Used%|%|{Name} Utilisation', '_PeakUsed|B|{Name} Peak Used', '_PeakUsed%|%|{Name} Peak Utilisation' ], 
    checkprintjob     => [ '_ItemCount||Print Job Count' ],
    checkprocess      => [ '_ItemCount||Process Count', '_NumExcluded||Excluded Process Count' ],
    checkquota        => [ '_ItemCount||Share Count',  ],
@@ -501,7 +501,7 @@ our %performance_data_fields = (
    checksmart        => [ 'Reallocated_Sector_Count||{_DiskDisplayName}_Reallocated_Sector_Count','Power_On_Hours||{_DiskDisplayName}_Power_On_Hours','Power_Cycle_Count||{_DiskDisplayName}_Power_Cycle_Count','Temperature||{_DiskDisplayName}_Temperature','Current_Pending_Sector||{_DiskDisplayName}_Current_Pending_Sector','Offline_Uncorrectable||{_DiskDisplayName}_Offline_Uncorrectable' ],
    checkstartupcommand=>[ '_ItemCount||Startup Command Count' ],
    checktime         => [ '_DiffSec' ],
-   checkuptime       => [ '_UptimeMin|min|Uptime Minutes', '_UptimeHours|hours|Uptime Hours', '_UptimeDays|days|Uptime Days' ],
+   checkuptime       => [ '_UptimeSec|s|Uptime Seconds', '_UptimeMin|min|Uptime Minutes', '_UptimeHours|hours|Uptime Hours', '_UptimeDays|days|Uptime Days' ],
    checkuseraccount  => [ '_ItemCount||User Account Count' ],
    checkvolsize      => [ '_UsedSpace|B|{VolumeDisplayName} Space', '_Used%|%|{VolumeDisplayName} Utilisation' ],
 
