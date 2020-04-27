@@ -1,4 +1,4 @@
-check_wmi_plus v1.64
+check_wmi_plus v1.65
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows - 
 
@@ -11,7 +11,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash] [--forceVariablesCriteriaSpec]
  
  Help as a Manpage:  
  
@@ -87,6 +87,12 @@ LESS COMMONLY USED OPTIONS
 
  --extrawmicarg EXTRAWMICARG  Specify additional arguments to be passed to the wmic command. The arguments are passed directly and must be complete and understood by wmic. In order to assist with escaping of quotes, all # are translated to ". To pass --option="client ntlmv2 auth"=Yes to wmic specifiy --extrawmicarg "--option=#client ntlmv2 auth#=Yes". This option can be specified multiple times to pass multiple arguments to wmic. If you are using the conf file setting for extra wmic arguments then any options specified here are added to the ones specified in the conf file.
 
+ --IgnoreZeroSizedDrives  By default zero size drive or volumes are included in volume and drive checks. Adding this option ignores them.
+ 
+ --IgnoreMyOutDatedPerlModuleVersions  Ignores warnings about outdated perl modules
+ 
+ --IgnoreAuthFileWarnings  Ignores warnings about problems reading authentication files (specified using the -A option)
+
  --inihelp  Show the help from the INIFILE for the specified MODE/SUBMODE. If specified without MODE/SUBMODE, this shows a quick short summary of all valid MODE/SUBMODEs in the ini files.
  
  --inifile=INIFILE  INIFILE is the full path of an ini file to use. The use of --inidir is preferred over this option.
@@ -121,7 +127,9 @@ LESS COMMONLY USED OPTIONS
 
  --logshow  Pro Version only. Show current Usage DB file.
  
- --variablesdisabled  Disable the use of static variables (from the ini files).
+ --variablesdisabled  Pro Version only. Disable the use of static variables (from the ini files).
+ 
+  --forceVariablesCriteriaSpec  Pro Version only. Normally warning and critical criteria specifications are not subject to static variable substitutions. This forces substitutions to be applied to these as well.
  
  --forceiniopen  Force reading of the ini files. You may want to do this if you are doing a non-ini file check and you are using global variables defined in an ini file. Only use this if you really need it since it makes each invocation of the plugin a lot slower (unless you are doing an ini file check already).
  
@@ -207,7 +215,7 @@ The convention used for field names in this plugin is as follows:
    6. alert is raised if metric is outside start and end range (inclusive of endpoints)
    7. if range starts with "@", then alert if inside this range (inclusive of endpoints)
    8. The start and end values can use multipliers from the following list: 
-       or the time-based multipliers .
+       or the time-based multipliers hr, yr, day, wk, min, mth, sec.
       The time-based multipliers are normally used where the data is in seconds.
       eg 1G for 1 x 10^9 or 2.5k for 2500
       eg 1wk for 1 week, 3.5day for 3.5 days etc
@@ -280,7 +288,7 @@ checkdrivesize
    Also see checkvolsize
    ARG1  drive letter or volume name of the disk to check. If omitted a list of valid drives will be shown. If set to . all drives will be included.
       To include multiple drives separate them with a |. This uses a regular expression so take care to
-      specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data"
+      specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data". Be aware that simpler expressions like "C" could match unexpected drives.
    ARG2  Set this to 1 to use volumes names (if they are defined) in plugin output and performance data ie -o 1
    ARG3  Set this to 1 to include information about the sum of all disk space on the entire system.
       If you set this you can also check warn/crit against the overall disk space.
@@ -347,14 +355,14 @@ checkeventlog
 
 checkfileage  
    ARG1  full path to the file. Use '/' (forward slash) instead of '\\' (backslash).
-   ARG2  set this to one of the time multipliers ()
+   ARG2  set this to one of the time multipliers (hr, yr, day, wk, min, mth, sec)
       This becomes the display unit and the unit used in the performance data. Default is hr.
       -z can not be used for this mode.
    WARN/CRIT  can be used as described below.
       The only valid Warning/Critical Field is _FileAge, so you don't even need to specify it!
       
       The warning/critical values should be specified in seconds. However you can use the time multipliers
-      () to make it easier to use
+      (hr, yr, day, wk, min, mth, sec) to make it easier to use
       
       eg instead of putting -w 3600 you can use -w 1hr
       
@@ -574,7 +582,7 @@ checkuptime
    WARN/CRIT  can be used as described below.
       The only valid Warning/Critical Field is _UptimeSec, so you don't even need to specify it!
       
-      The warning/critical values should be specified in seconds. However you can use the time multipliers () to make it easier to use.
+      The warning/critical values should be specified in seconds. However you can use the time multipliers (hr, yr, day, wk, min, mth, sec) to make it easier to use.
       
       eg instead of putting -w 1800 you can use -w 30min
       
@@ -909,7 +917,7 @@ INI FILE HELP SUMMARY
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: ActiveInputVoltage (Default), TotalOutputPower, TotalPowerOnHours
 
  checkprint, spooler (-m checkprint -s spooler)  
-   Checks various print spooler stats
+   Checks various print spooler stats.
    Tested for Windows Server 2003/2008 R2. Only tested on a low volume server.
    This check can return information about multiple printers in a single check.
    ARG1  The printer queue name to view stats for. Use _Total for the total stats for all print queues.
@@ -920,9 +928,20 @@ INI FILE HELP SUMMARY
 
    WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: _BytesPrintedPersec (Default), JobErrors, Jobs, JobsSpooling, NotReadyErrors, OutofPaperErrors, TotalJobsPrinted, TotalPagesPrinted
 
+ checkprint, status (-m checkprint -s status)  
+   Pro Version only.
+   Checks print device status.
+   Tested for Windows 10 and above. Only tested on a low volume server.
+   This check can return information about multiple printers in a single check.
+   ARG1  The printer queue name to view the status for.
+   Use % for wildcards. The printer queue name can be seen in the Printer & Scanner screen
+   eg "Microsoft XPS Document Writer", "%laser%".
+
+   WARN/CRIT  can be used for this MODE. You need to specify a field name if not using the Default field eg -w FIELD=VALUE or simply -w VALUE for the Default field. Valid Warning/Critical Fields are: PrinterStatus (Default), Availability, DetectedErrorState, ErrorDescription, ExtendedDetectedErrorState, ExtendedPrinterStatus, Status, StatusInfo
+
  checkprint, test (-m checkprint -s test)  
    Demo check for join= and joinquery= settings.
-   Grabs the same information as checkprinter spooler but adds a couple of extra fields from another WMI Class. 
+   Grabs the same information as checkprint spooler but adds a couple of extra fields from another WMI Class. 
    ARG1  The printer queue name to view stats for. Use _Total for the total stats for all print queues.
    Use % for wildcards. The printer queue name can be seen in the Device and Printer screen
    eg "Microsoft XPS Document Writer", "%laser%".

@@ -76,7 +76,7 @@ BRIEF
 
  Complete Usage:  
  
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash] [--forceVariablesCriteriaSpec]
  
  Help as a Manpage:  
  
@@ -152,6 +152,12 @@ LESS COMMONLY USED OPTIONS
 
  --extrawmicarg EXTRAWMICARG  Specify additional arguments to be passed to the wmic command. The arguments are passed directly and must be complete and understood by wmic. In order to assist with escaping of quotes, all # are translated to ". To pass --option="client ntlmv2 auth"=Yes to wmic specifiy --extrawmicarg "--option=#client ntlmv2 auth#=Yes". This option can be specified multiple times to pass multiple arguments to wmic. If you are using the conf file setting for extra wmic arguments then any options specified here are added to the ones specified in the conf file.
 
+ --IgnoreZeroSizedDrives  By default zero size drive or volumes are included in volume and drive checks. Adding this option ignores them.
+ 
+ --IgnoreMyOutDatedPerlModuleVersions  Ignores warnings about outdated perl modules
+ 
+ --IgnoreAuthFileWarnings  Ignores warnings about problems reading authentication files (specified using the -A option)
+
  --inihelp  Show the help from the INIFILE for the specified MODE/SUBMODE. If specified without MODE/SUBMODE, this shows a quick short summary of all valid MODE/SUBMODEs in the ini files.
  
  --inifile=INIFILE  INIFILE is the full path of an ini file to use. The use of --inidir is preferred over this option.
@@ -186,7 +192,9 @@ LESS COMMONLY USED OPTIONS
 
  --logshow  Pro Version only. Show current Usage DB file.
  
- --variablesdisabled  Disable the use of static variables (from the ini files).
+ --variablesdisabled  Pro Version only. Disable the use of static variables (from the ini files).
+ 
+  --forceVariablesCriteriaSpec  Pro Version only. Normally warning and critical criteria specifications are not subject to static variable substitutions. This forces substitutions to be applied to these as well.
  
  --forceiniopen  Force reading of the ini files. You may want to do this if you are doing a non-ini file check and you are using global variables defined in an ini file. Only use this if you really need it since it makes each invocation of the plugin a lot slower (unless you are doing an ini file check already).
  
@@ -341,7 +349,7 @@ checkdrivesize
    Also see checkvolsize
    ARG1  drive letter or volume name of the disk to check. If omitted a list of valid drives will be shown. If set to . all drives will be included.
       To include multiple drives separate them with a |. This uses a regular expression so take care to
-      specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data"
+      specify exactly what you want. eg "C" or "C:" or "C|E" or "." or "Data". Be aware that simpler expressions like "C" could match unexpected drives.
    ARG2  Set this to 1 to use volumes names (if they are defined) in plugin output and performance data ie -o 1
    ARG3  Set this to 1 to include information about the sum of all disk space on the entire system.
       If you set this you can also check warn/crit against the overall disk space.
