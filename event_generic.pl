@@ -28,7 +28,7 @@ use Getopt::Long;
 
 # uses the following NAGIOS_* environment variables that should be set in the environment for proper execution
 # if you are using ICINGA that variables are named ICINGA_*
-#$ENV{'NAGIOS_SERVICESTATE'}='CRITICAL';  # CRITICAL, WARNING, UNKNOWN, OK 
+#$ENV{'NAGIOS_SERVICESTATE'}='CRITICAL';  # CRITICAL, WARNING, UNKNOWN, OK
 #$ENV{'NAGIOS_SERVICEATTEMPT'}='1';  # a number
 #$ENV{'NAGIOS_MAXSERVICEATTEMPTS'}='3';  # a number
 #$ENV{'NAGIOS_SERVICESTATETYPE'}='SOFT';  # SOFT or HARD
@@ -100,7 +100,7 @@ if ($debug) {
 }
 
 if ($opt_test) {
-   # load the test parameters into the %ENV 
+   # load the test parameters into the %ENV
    # the incoming format is SERVICESTATE|ATTEMPT|MAXATTEMPTS|STATETYPE|SERVICEOUTPUT
    # no error checking here ...........
    my @testparam=split(/\|/,$opt_test);
@@ -121,8 +121,8 @@ $SIG{'ALRM'} = sub {
    exit 1;
 };
 alarm($TIMEOUT);
- 
- 
+
+
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------
@@ -150,7 +150,7 @@ my $nagios_servicestatetype=$ENV{'NAGIOS_SERVICESTATETYPE'} || $ENV{'ICINGA_SERV
 my $nagios_serviceoutput=$ENV{'NAGIOS_SERVICEOUTPUT'} || $ENV{'ICINGA_SERVICEOUTPUT'} || '';
 
 print "HOST=$nagios_hostname, SERVICE=$nagios_servicedesc, STATE=$nagios_servicestate, ATTEMPT $nagios_serviceattempt/$nagios_maxserviceattempts, TYPE=$nagios_servicestatetype, OUTPUT=$nagios_serviceoutput\n";
-   
+
 # now determine which commands should be run for the current NAGIOS_SERVICESTATE (critical, warning etc)
 # loop through all defined commands
 
@@ -158,16 +158,16 @@ my $command_number=0;
 foreach my $command (@{$opt_command}) {
    # for each command that is defined check the states that it should be run for
    # see if the current NAGIOS_SERVICESTATE is in the statelist entry for command number $command_number
-   # look in the statelist matching this command number 
+   # look in the statelist matching this command number
    $debug && print "------------- Start of Command#$command_number -------------------\n";
    my $statetype=substr($nagios_servicestate,0,1);
-   
+
    my $execute=0;
-   
+
    my $execute_because_of_softhard=0;
    my $execute_because_of_statetype=0;
    my $execute_because_of_regex=0;
-   
+
    my $execute_on_soft='';
    my $execute_on_hard='';
    my $soft_number='';
@@ -187,12 +187,12 @@ foreach my $command (@{$opt_command}) {
 
       # check if we have been asked to execute on the last soft state before hard
       if ($execute_on_soft && $soft_number eq 'L') {
-         # soft state execution on the last soft state which is calculated by 
+         # soft state execution on the last soft state which is calculated by
          # NAGIOS_MAXSERVICEATTEMPTS - 1
          $soft_number=$nagios_maxserviceattempts-1;
          $debug && print "Setting execution for Soft attempt number $soft_number\n";
       }
-      
+
    } else {
       # neither hard nor soft specified so default to hard
       $debug && print "Defaulting to Execute on HARD\n";
@@ -213,20 +213,20 @@ foreach my $command (@{$opt_command}) {
          $debug && print "Not executing for current Soft attempt number $nagios_serviceattempt\n";
       }
    }
-   
+
    if ($execute_on_hard && $nagios_servicestatetype eq 'HARD') {
       $execute_because_of_softhard=1;
       print "Executing on HARD Status\n";
    }
-   
-   
+
+
    if ($execute_because_of_softhard) {
       my $compare_statelist=$$opt_statelist[$command_number];
       if ($opt_usefirststatelist) {
          $compare_statelist=$$opt_statelist[0];
          $debug && print "Forcing use of only the first statelist defined\n";
       }
-   
+
       if (!$compare_statelist) {
          # default to critical if nothing defined
          $compare_statelist='C';
@@ -239,14 +239,14 @@ foreach my $command (@{$opt_command}) {
       } else {
          $debug && print "Not executing since the current state type is not in the defined list\n";
       }
-      
+
       # now make the regex decision
       my $compare_regex=$$opt_regex[$command_number];
       if ($opt_usefirstregex) {
          $compare_regex=$$opt_regex[0];
          $debug && print "Forcing use of only the first regex defined\n";
       }
-      
+
       if ($execute_because_of_softhard && $execute_because_of_statetype) {
          if ($compare_regex) {
             if ($nagios_serviceoutput=~/$compare_regex/i) {
@@ -260,7 +260,7 @@ foreach my $command (@{$opt_command}) {
             $execute_because_of_regex=1;
          }
       }
-   
+
       $debug && print "Execute Check Status:Soft/Hard=$execute_because_of_softhard && State=$execute_because_of_statetype && Regex=$execute_because_of_regex\n";
       # and finally actually execute the command if we are supposed to
       if ($execute_because_of_softhard && $execute_because_of_statetype && $execute_because_of_regex) {
@@ -273,7 +273,7 @@ foreach my $command (@{$opt_command}) {
    }
    $debug && print "------------- End of Command#$command_number -------------------\n";
    $command_number++;
-      
+
 }
 
 
@@ -308,7 +308,7 @@ WHEN        Control over execution in SOFT or HARD states
 REGEX       Only execute the command if the REGEX matches the output text of the service
             that the event handler is running for. The REGEX is case insensitive.
 
-COMMAND     Is the complete command with arguments to be executed. Run multiple commands 
+COMMAND     Is the complete command with arguments to be executed. Run multiple commands
             by separating them with a semi-colon (;). For example:
             'date;id;uname -a'
 
@@ -322,7 +322,7 @@ FILE        The name of a file to dump debug info to. Needs to be Nagios writeab
 
 TIMEOUT     Specify a timeout for this event handler in seconds
 
-ENVTEST     A pipe delimited string which sets up fake environment variables to simulate being called from Nagios. 
+ENVTEST     A pipe delimited string which sets up fake environment variables to simulate being called from Nagios.
             Used for testing only. Format is SERVICESTATE|ATTEMPT|MAXATTEMPTS|STATETYPE|SERVICEOUTPUT where
             SERVICESTATE = one of CRITICAL, WARNING, UNKNOWN, OK
             ATTEMPT = an integer. The number of times Nagios has found the service in this state.
@@ -354,7 +354,7 @@ Remember that if you do not specify -l, it will default to c
 EXAMPLES:
 =========
 The most basic usage is run a command on HARD CRITICAL states:
-$0 -c "COMMAND" 
+$0 -c "COMMAND"
 
 To run a command on the last SOFT CRITICAL state (ie just before it goes HARD):
 $0 -c "COMMAND" -w sL
@@ -377,7 +377,7 @@ $0 -c "COMMAND1" -r "really bad problem"
 To run a command if the output does not contain "timeout":
 $0 -c "COMMAND1" -r '^(?!.*?timeout).*'
 
-To test outside of Nagios you need to provide the information that Nagios would otherwise provide. 
+To test outside of Nagios you need to provide the information that Nagios would otherwise provide.
 So you might run it like this:
 To simulate the first time a service has a problem -
 $0 -d stdout -e "CRIT|1|3|SOFT|Service XX has a problem" -c "sleep 0"

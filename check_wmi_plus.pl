@@ -31,7 +31,7 @@ my $conf_file='/etc/check_wmi_plus/check_wmi_plus.conf';
 
 # we are looking for the dir where utils.pm is located. This is normally installed as part of Nagios
 use lib "/usr/lib/nagios/plugins";
-use lib "/usr/lib64/nagios/plugins"; 
+use lib "/usr/lib64/nagios/plugins";
 
 # you shouldn't need to change anything else below this line
 # change the settings in the $conf_file itself
@@ -43,10 +43,10 @@ use lib "/usr/lib64/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.64;
+our $VERSION=1.65;
 
 # which version of PRO (if used does this require)
-our $requires_PRO_VERSION=1.28;
+our $requires_PRO_VERSION=1.30;
 
 use strict;
 use Getopt::Long;
@@ -109,21 +109,24 @@ our $opt_disable_pro='';
 # then we have consistent usage throughout
 my %the_original_arguments=(); # used to store the original user specified command line arguments  - sometimes we change the arguments
 our %the_arguments = (
-   _mode  => '',     # just for duplicate storage of the mode (Since we actually modify the actual mode variable for ini files)
-   _submode => '',   # just for duplicate storage of the submode
-   _arg1  => '',
-   _arg2  => '',
-   _arg3  => '',
-   _arg4  => undef, # we need this undef for checkeventlog so we know if something was specified or not - take care with other checks that use this
-   _arg5  => undef,
-   _bytefactor  => '',
-   _delay       => '',
-   _host        => '',
-   _nodatamode  => '',
-   _nodataexit  => '',
-   _nodatastring=> "WMI Query returned no data. The item you were looking for may NOT exist or the software that creates the WMI Class may not be running, or all data has been excluded.\n",
-   _timeout     => '',
-   _truncate_output  => 8192,
+   _mode                         => '',     # just for duplicate storage of the mode (Since we actually modify the actual mode variable for ini files)
+   _submode                      => '',   # just for duplicate storage of the submode
+   _arg1                         => '',
+   _arg2                         => '',
+   _arg3                         => '',
+   _arg4                         => undef, # we need this undef for checkeventlog so we know if something was specified or not - take care with other checks that use this
+   _arg5                         => undef,
+   _bytefactor                   => '',
+   _delay                        => '',
+   _forcevariablescriteriaspec   => '',
+   _host                         => '',
+   _ignorezerosizedrives         => '',
+   _nodatamode                   => '',
+   _nodataexit                   => '',
+   _nodatastring                 => "WMI Query returned no data. The item you were looking for may NOT exist or the software that creates the WMI Class may not be running, or all data has been excluded.\n",
+   _staticsubcriteria            => '1',
+   _timeout                      => '',
+   _truncate_output              => 8192,
 );
 
 # arrays/hashes where we will store information about warn/critical specs/checks
@@ -172,7 +175,7 @@ our %event_counts=(
    CRITERIA => 1,
    EVENT    => 2,
 );
-  
+
 
 
 #==============================================================================
@@ -186,7 +189,7 @@ my $default_bytefactor=1024;
 # work out the conf file dir
 our $conf_file_dir=$conf_file;
 # remove the filename from the end of the conf_file to get the dir
-$conf_file_dir=~s/^(.*)\/(.*?)$/$1/; 
+$conf_file_dir=~s/^(.*)\/(.*?)$/$1/;
 
 # ================================== DEFAULT CONFIGURATION ================================
 # override these settings using the $conf_file (which is defined right near the top of this script)
@@ -314,7 +317,7 @@ use utils qw ($TIMEOUT %ERRORS &print_revision &support);
 
 # list all valid modes with dedicated subroutines here
 # all the modes that can take a critical/warning specification set to value of 1
-my %mode_list = ( 
+my %mode_list = (
    checkcpu             => 1,
    checkcpuq            => 1,
    checkdnsrecords      => 1,
@@ -354,7 +357,7 @@ my %multipliers=(
    e  => 6,
 );
 
-my %time_multipliers=(
+our %time_multipliers=( # use "our" so that the help.pl library can access it
    sec   => 1,
    min   => 60,
    hr    => 3600,
@@ -400,7 +403,7 @@ our %valid_test_fields = (
    checklogon        => [ qw(_ItemCount _ItemChange) ],
    checkmem          => [ qw(_MemUsed% _MemFree% _MemUsed _MemFree _MemTotal) ],
    checknetwork      => [ qw(CurrentBandwidth _PacketsSentPersec _PacketsReceivedPersec OutputQueueLength PacketsReceivedErrors _BytesSentPersec _BytesReceivedPersec _SendBytesUtilisation _ReceiveBytesUtilisation) ],
-   checkpage         => [ qw(_Used% _Used _Free _Free% _PeakUsed% _PeakUsed _PeakFree _PeakFree% _Total) ], 
+   checkpage         => [ qw(_Used% _Used _Free _Free% _PeakUsed% _PeakUsed _PeakFree _PeakFree% _Total) ],
    checkprintjob     => [ qw(_ItemCount _ItemChange Color Status TotalPages Owner Document DataType) ],
    checkprocess      => [ qw(_ItemCount _NumExcluded) ],
    checkquota        => [ qw(_ItemCount _ItemChange DiskSpaceUsed Limit Status WarningLimit) ],
@@ -427,7 +430,7 @@ our %pre_display_fields = (
 our %display_fields = (
    # key name is the name of the mode
    # value is an array of fields names to display
-   # the value can be in 2 formats - 
+   # the value can be in 2 formats -
    # 1) FIELD (where we just display this field like FIELD=xx,
    # 2) FIELD|UNITS (where we just display this field like FIELD=xxUNITS,
    # 3) FIELD|UNITS|DISPLAY|SEP|DELIM|START|END
@@ -437,8 +440,8 @@ our %display_fields = (
    # DISPLAY normally shows FIELD or whatever you specify as DISPLAY. Set DISPLAY to ~ to show nothing.
    # if units is prefixed with # then we use a function to convert it to a scaled based figure using prefixes like K, M, G etc - the calculation is influenced by the BYTEFACTOR setting
    # In DISPLAY/START/END anything enclosed in {} will be substituted by the value of that item of that name eg {DeviceID} will replace by the value contained in DeviceID eg C:
-   # eg BytesSentPersec will be shown as BytesSentPersec=XX, 
-   # eg BytesSentPersec|BYTES will be shown as BytesSentPersec=XXBytes, 
+   # eg BytesSentPersec will be shown as BytesSentPersec=XX,
+   # eg BytesSentPersec|BYTES will be shown as BytesSentPersec=XXBytes,
    # eg _Used%|%|.|.||(|) will be shown as (45.2%)
    # I was going to use qw() but it makes it way harder to read. You could still use it for the most basic format
    checkcpu          => [ '_DisplayMsg||~|~| - ||', '_AvgCPU|%|Average CPU Utilisation| |~||' ],
@@ -446,17 +449,17 @@ our %display_fields = (
    checkdnsrecords   => [ '_DisplayMsg||~|~| - ||', '_DNSDetails||~|~|~||. ', '_WMIDetails||~|~|~||. ' ],
    checkdrivesize    => [ '_DisplayMsg||~|~| - ||', 'DiskDisplayName||~|~| ||', 'Size|#B|Total||||', '_UsedSpace|#B|Used|| ||', '_Used%|%|~|~||(|)', 'FreeSpace|#B|Free|| ||', '_Free%|%|~|~||(|)' ],
    checkeventlog     => [ '_DisplayMsg||~|~| - ||', '_ItemCount| event(s)|~|~| ||', '_SeverityType||~|~||of Severity Level: "|"', '_arg3| hours|~|~|~|were recorded in the last |', '_arg1||~|~|~| from the | Event Log.', "_EventList||~|~|~||" ],
-   checkfileage      => [ '_DisplayMsg||~|~| - ||', '_arg1||Age of File| |~|| is ', '_NicelyFormattedFileAge||~|~|~|| or ', '_DisplayFileAge||~|~|~||', '_PerfDataUnit||~|~|||(s).' ], 
-   checkfilesize     => [ '_DisplayMsg||~|~| - ||', '_arg1||File| |~|| is ', 'FileSize|#B|~|~|. ||', '_ItemCount| instance(s)|Found| |.||' ], 
-   checkfoldersize   => [ '_DisplayMsg||~|~| - ||', '_arg1||Folder| |~|| is ', '_FolderSize|#B|~|~|. ||', '_ItemCount| files(s)|Found| |.||', '_FileList||~|~|~||' ], 
-   checkgeneric      => [ '_DisplayMsg||~|~| - ||', 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ], 
+   checkfileage      => [ '_DisplayMsg||~|~| - ||', '_arg1||Age of File| |~|| is ', '_NicelyFormattedFileAge||~|~|~|| or ', '_DisplayFileAge||~|~|~||', '_PerfDataUnit||~|~|||(s).' ],
+   checkfilesize     => [ '_DisplayMsg||~|~| - ||', '_arg1||File| |~|| is ', 'FileSize|#B|~|~|. ||', '_ItemCount| instance(s)|Found| |.||' ],
+   checkfoldersize   => [ '_DisplayMsg||~|~| - ||', '_arg1||Folder| |~|| is ', '_FolderSize|#B|~|~|. ||', '_ItemCount| files(s)|Found| |.||', '_FileList||~|~|~||' ],
+   checkgeneric      => [ '_DisplayMsg||~|~| - ||', 'FileControlBytesPersec', 'FileControlOperationsPersec', 'FileDataOperationsPersec', 'FileReadBytesPersec', 'FileReadOperationsPersec', 'FileWriteBytesPersec', 'FileWriteOperationsPersec' ],
    checkgroup        => [ '_DisplayMsg||~|~| - ||', '_ItemCount| group(s). |Found |~|~||', '_ItemChange||Groups changed since last check=|~|~||', '_ItemList||~|~|~||' ],
    checkgroupuser    => [ '_DisplayMsg||~|~| - ||', '_ItemCount| group user(s). |Found |~|~||', '_ItemChange||Group users changed since last check=|~|~||', '_ItemList||~|~|~||' ],
    checklogon        => [ '_DisplayMsg||~|~| - ||', '_ItemCount| logon(s). |Found |~|~||', '_ItemChange||Logons changed since last check=|~|~||', '_ItemList||~|~|~||' ],
-   checkmem          => [ '_DisplayMsg||~|~| - ||', 'MemType||~|~|~||: ', '_MemTotal|#B|Total|: | - ||', '_MemUsed|#B|Used|: | ||', '_MemUsed%|%|~|~| - |(|)', '_MemFree|#B|Free|: | ||', '_MemFree%|%|~|~||(|)' ], 
+   checkmem          => [ '_DisplayMsg||~|~| - ||', 'MemType||~|~|~||: ', '_MemTotal|#B|Total|: | - ||', '_MemUsed|#B|Used|: | ||', '_MemUsed%|%|~|~| - |(|)', '_MemFree|#B|Free|: | ||', '_MemFree%|%|~|~||(|)' ],
    checknetwork      => [ '_DisplayMsg||~|~| - ||', '_DisplayName||Interface:|~|||', 'IPAddress||IP Address:|~|||', 'MACAddress||MAC Address |~|||', 'CurrentBandwidth|#bit/s|Speed:|~|||', 'DHCPEnabled', '_BytesSentPersec|#B/sec|Byte Send Rate|| (||', '_SendBytesUtilisation|%|Utilisation||), ||', '_BytesReceivedPersec|#B/sec|Byte Receive Rate||(||', '_ReceiveBytesUtilisation|%|Utilisation||) ||', '_PacketsSentPersec|#packet/sec|Packet Send Rate||||', '_PacketsReceivedPersec|#packet/sec|Packet Receive Rate||||', 'OutputQueueLength||Output Queue Length||||', 'PacketsReceivedErrors||Packets Received Errors||||' ],
    checkquota        => [ '_DisplayMsg||~|~| - ||', '_ItemCount| quota(s). |Found |~|~||', '_ItemChange||Quotas changed since last check=|~|~||', '_ItemList||~|~|~||' ],
-   checkpage         => [ '_DisplayMsg||~|~| - ||', 'Name||~|~| ||', '_Total|#B|Total|: | - ||', '_Used|#B|Used|: | ||', '_Used%|%|~|~| - |(|)', '_Free|#B|Free|: | ||', '_Free%|%|~|~||(|)', '_PeakUsed|#B|Peak Used|: | ||', '_PeakUsed%|%|~|~| - |(|)', '_PeakFree|#B|Peak Free|: | ||', '_PeakFree%|%|~|~||(|)' ], 
+   checkpage         => [ '_DisplayMsg||~|~| - ||', 'Name||~|~| ||', '_Total|#B|Total|: | - ||', '_Used|#B|Used|: | ||', '_Used%|%|~|~| - |(|)', '_Free|#B|Free|: | ||', '_Free%|%|~|~||(|)', '_PeakUsed|#B|Peak Used|: | ||', '_PeakUsed%|%|~|~| - |(|)', '_PeakFree|#B|Peak Free|: | ||', '_PeakFree%|%|~|~||(|)' ],
    checkprintjob     => [ '_DisplayMsg||~|~| - ||', '_ItemCount| print jobs(s). |Found |~|~||', '_ItemChange||Print Job Queue changed since last check=|~|~||', '_ItemList||~|~|~||' ],
    checkprocess      => [ '_DisplayMsg||~|~| - ||', '_ItemCount| Instance(s)|Found |~|~|| of "{_arg1}" running ', '_NumExcluded| excluded|~|~|~|(|). ', 'ProcessList||~|~|~||' ],
    checkservice      => [ '_DisplayMsg||~|~| - ||', '_Total| Services(s)|Found |~|||', '_NumGood| OK|~|~| and ||', '_NumBad| with problems |~|~|~||', '_NumExcluded| excluded|~|~|~|(|). ', '_ServiceList||~|~|~||' ],
@@ -474,7 +477,7 @@ our %display_fields = (
 our %performance_data_fields = (
    # key name is the name of the mode
    # value is an array of fields names to display
-   # the value can be in 2 formats - 
+   # the value can be in 2 formats -
    # 1) FIELD
    # 2) FIELD|UNITS
    # 3) FIELD|UNITS|DISPLAY
@@ -490,9 +493,9 @@ our %performance_data_fields = (
    checkgroup        => [ '_ItemCount||Group Count' ],
    checkgroupuser    => [ '_ItemCount||Group User Count' ],
    checklogon        => [ '_ItemCount||Logon Count' ],
-   checkmem          => [ '_MemUsed|B|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ], 
+   checkmem          => [ '_MemUsed|B|{MemType} Used', '_MemUsed%|%|{MemType} Utilisation' ],
    checknetwork      => [ '_BytesSentPersec||{_DisplayName} BytesSentPersec', '_SendBytesUtilisation|%|{_DisplayName} Send Utilisation', '_BytesReceivedPersec||{_DisplayName} BytesReceivedPersec', '_ReceiveBytesUtilisation|%|{_DisplayName} Receive Utilisation', '_PacketsSentPersec||{_DisplayName} PacketsSentPersec', '_PacketsReceivedPersec||{_DisplayName} PacketsReceivedPersec', 'OutputQueueLength||{_DisplayName} OutputQueueLength', 'PacketsReceivedErrors||{_DisplayName} PacketsReceivedErrors' ],
-   checkpage         => [ '_Total|B|{Name} Page File Size', '_Used|B|{Name} Used', '_Used%|%|{Name} Utilisation', '_PeakUsed|B|{Name} Peak Used', '_PeakUsed%|%|{Name} Peak Utilisation' ], 
+   checkpage         => [ '_Total|B|{Name} Page File Size', '_Used|B|{Name} Used', '_Used%|%|{Name} Utilisation', '_PeakUsed|B|{Name} Peak Used', '_PeakUsed%|%|{Name} Peak Utilisation' ],
    checkprintjob     => [ '_ItemCount||Print Job Count' ],
    checkprocess      => [ '_ItemCount||Process Count', '_NumExcluded||Excluded Process Count' ],
    checkquota        => [ '_ItemCount||Share Count',  ],
@@ -534,7 +537,7 @@ our $final_exit_code='';
 
 our $plugin_output='';
 
-# PRO only: this is the file where we control the usage file currently written to 
+# PRO only: this is the file where we control the usage file currently written to
 our $current_usage_db_suffix_file="$wmi_data_dir/check_wmi_plus.usagedb.suffix";
 
 # Pro flags for final decisions on usage stats
@@ -575,73 +578,74 @@ if ($host_os =~ m/win32$/i) {
 
 Getopt::Long::Configure('no_ignore_case');
 GetOptions(
-   "Authenticationfile=s"           => \$opt_auth_file,
-   "arguments=s"                    => \$the_arguments{'_arg1'},
-   "bytefactor=s"                   => \$the_arguments{'_bytefactor'},
-   "Convertslash"                   => \$the_arguments{'_convertslash'},
-   "critical=s@"                    => \$opt_critical,
-   "debug+"                         => \$debug,
-   "excludedata=s@"                 => \@opt_exclude_data,
-   "extrawmicargs=s@"               => \@opt_extra_wmic_args,
-   "fieldshow"                      => \$opt_show_fields,
-   "filterinirowsbystatus=s"        => \$opt_filter_ini_rows_by_status,
-   "forceiniopen"                   => \$force_ini_open,
-   "forcewmiccommand"               => \$force_wmic_command,
-   "forcetruncateoutput=s"          => \$the_arguments{'_truncate_output'},
-   "help"                           => \$opt_help,
-   "helperexpiry=s"                 => \$opt_helper_state_expiry,
-   "Hostname=s"                     => \$the_arguments{'_host'},
-   "icollectusage!"                 => \$opt_collect_usage,
-   "iexamples=s"                    => \$opt_command_examples,
-   "IgnoreMyOutDatedPerlModuleVersions"
-                                    => \$opt_ignore_versions,
-   "IgnoreAuthFileWarnings"         => \$opt_ignore_auth_file_warnings,
-   "includedata=s@"                 => \@opt_include_data,
-   "idisablepro"                    => \$opt_disable_pro,
-   "inidir=s"                       => \$wmi_ini_dir,
-   "inifile=s"                      => \$wmi_ini_file,
-   "inihelp"                        => \$opt_inihelp,
-   "installmoduledir"               => \$opt_installmodule_dir,
-   "ipackage"                       => \$opt_package,
-   "itexthelp"                      => \$opt_texthelp,
-   "ishowusage!"                    => \$opt_show_usage,
-   "iusecachewmicresponse"          => \$opt_use_cached_wmic_response,
-   "itestwmicfilebase=s"            => \$test_wmic_file_base,
-   "itestnumber=s"                  => \$test_number,
-   "itestgenerate"                  => \$test_generate,
-   "itestrun"                       => \$test_run,
-   "itestignorehelperstatefiles"    => \$test_ignorehelperstatefiles,
-   "itestignorejoinstatefiles"      => \$test_ignorejoinstatefiles,
-   "itestignorekeepstatefiles"      => \$test_ignorekeepstatefiles,
-   "joinexpiry=s"                   => \$opt_join_state_expiry,
-   "keepexpiry=s"                   => \$opt_keep_state_expiry,
-   "keepid=s"                       => \$opt_keep_state_id,
-   "keepstate!"                     => \$opt_keep_state,
-   "logkeep"                        => \$opt_log_usage_keep,
-   "logshow"                        => \$opt_log_usage_show,
-   "logsuffix=s"                    => \$opt_log_usage_suffix,
-   "logswitch"                      => \$opt_log_usage_switch,
-   "Mapexitstatus=s@"               => \@opt_map_exit_status,
-   "mode=s"                         => \$opt_mode,
-   "namespace=s"                    => \$opt_wminamespace,
-   "nodataexit=s"                   => \$the_arguments{'_nodataexit'},
-   "nodatamode"                     => \$the_arguments{'_nodatamode'},
-   "nodatastring=s"                 => \$the_arguments{'_nodatastring'},
-   "otheraguments=s"                => \$the_arguments{'_arg2'},
-   "password=s"                     => \$opt_password,
-   "submode=s"                      => \$opt_submode,
-   "timeout=i"                      => \$the_arguments{'_timeout'},
-   "username=s"                     => \$opt_username,
-   "value=s"                        => \$opt_value,
-   "variablesdisabled"              => \$opt_disable_static_variables,
-   "version"                        => \$opt_Version,
-   "warning=s@"                     => \$opt_warn,
-   "ydelay=s"                       => \$the_arguments{'_delay'},
-   "z"                              => \$opt_z,
-   "3arg=s"                         => \$the_arguments{'_arg3'},
-   "4arg=s"                         => \$the_arguments{'_arg4'},
-   "5arg=s"                         => \$the_arguments{'_arg5'},
-   );                               
+   "Authenticationfile=s"                 => \$opt_auth_file,
+   "arguments=s"                          => \$the_arguments{'_arg1'},
+   "bytefactor=s"                         => \$the_arguments{'_bytefactor'},
+   "Convertslash"                         => \$the_arguments{'_convertslash'},
+   "critical=s@"                          => \$opt_critical,
+   "debug+"                               => \$debug,
+   "excludedata=s@"                       => \@opt_exclude_data,
+   "extrawmicargs=s@"                     => \@opt_extra_wmic_args,
+   "fieldshow"                            => \$opt_show_fields,
+   "filterinirowsbystatus=s"              => \$opt_filter_ini_rows_by_status,
+   "forceiniopen"                         => \$force_ini_open,
+   "forcewmiccommand"                     => \$force_wmic_command,
+   "forcetruncateoutput=s"                => \$the_arguments{'_truncate_output'},
+   "forceVariablesCriteriaSpec"           => \$the_arguments{'_forcevariablescriteriaspec'},
+   "help"                                 => \$opt_help,
+   "helperexpiry=s"                       => \$opt_helper_state_expiry,
+   "Hostname=s"                           => \$the_arguments{'_host'},
+   "icollectusage!"                       => \$opt_collect_usage,
+   "iexamples=s"                          => \$opt_command_examples,
+   "IgnoreMyOutDatedPerlModuleVersions"   => \$opt_ignore_versions,
+   "IgnoreAuthFileWarnings"               => \$opt_ignore_auth_file_warnings,
+   "IgnoreZeroSizedDrives"                => \$the_arguments{'_ignorezerosizedrives'},
+   "includedata=s@"                       => \@opt_include_data,
+   "idisablepro"                          => \$opt_disable_pro,
+   "inidir=s"                             => \$wmi_ini_dir,
+   "inifile=s"                            => \$wmi_ini_file,
+   "inihelp"                              => \$opt_inihelp,
+   "installmoduledir"                     => \$opt_installmodule_dir,
+   "ipackage"                             => \$opt_package,
+   "itexthelp"                            => \$opt_texthelp,
+   "ishowusage!"                          => \$opt_show_usage,
+   "iusecachewmicresponse"                => \$opt_use_cached_wmic_response,
+   "itestwmicfilebase=s"                  => \$test_wmic_file_base,
+   "itestnumber=s"                        => \$test_number,
+   "itestgenerate"                        => \$test_generate,
+   "itestrun"                             => \$test_run,
+   "itestignorehelperstatefiles"          => \$test_ignorehelperstatefiles,
+   "itestignorejoinstatefiles"            => \$test_ignorejoinstatefiles,
+   "itestignorekeepstatefiles"            => \$test_ignorekeepstatefiles,
+   "joinexpiry=s"                         => \$opt_join_state_expiry,
+   "keepexpiry=s"                         => \$opt_keep_state_expiry,
+   "keepid=s"                             => \$opt_keep_state_id,
+   "keepstate!"                           => \$opt_keep_state,
+   "logkeep"                              => \$opt_log_usage_keep,
+   "logshow"                              => \$opt_log_usage_show,
+   "logsuffix=s"                          => \$opt_log_usage_suffix,
+   "logswitch"                            => \$opt_log_usage_switch,
+   "Mapexitstatus=s@"                     => \@opt_map_exit_status,
+   "mode=s"                               => \$opt_mode,
+   "namespace=s"                          => \$opt_wminamespace,
+   "nodataexit=s"                         => \$the_arguments{'_nodataexit'},
+   "nodatamode"                           => \$the_arguments{'_nodatamode'},
+   "nodatastring=s"                       => \$the_arguments{'_nodatastring'},
+   "otheraguments=s"                      => \$the_arguments{'_arg2'},
+   "password=s"                           => \$opt_password,
+   "submode=s"                            => \$opt_submode,
+   "timeout=i"                            => \$the_arguments{'_timeout'},
+   "username=s"                           => \$opt_username,
+   "value=s"                              => \$opt_value,
+   "variablesdisabled"                    => \$opt_disable_static_variables,
+   "version"                              => \$opt_Version,
+   "warning=s@"                           => \$opt_warn,
+   "ydelay=s"                             => \$the_arguments{'_delay'},
+   "z"                                    => \$opt_z,
+   "3arg=s"                               => \$the_arguments{'_arg3'},
+   "4arg=s"                               => \$the_arguments{'_arg4'},
+   "5arg=s"                               => \$the_arguments{'_arg5'},
+   );
 
 if ($test_run) {
    # if both options supplied, ignore generate
@@ -742,7 +746,7 @@ if ($debug || $test_generate) {
       print "Conf File Dir: $conf_file_dir\n";
       print "Loaded Conf File $conf_file\n";
       print "WMI Ini Dir: $wmi_ini_dir\n";
-         
+
       if ($debug>=2) {
          no warnings;
          # get some info about the system
@@ -792,7 +796,13 @@ if ($opt_package) {
       rm $wmi_data_dir/check_wmi_plus.compiledini;
       touch $wmi_data_dir/check_wmi_plus.compiledini;
       chown -R nagios:nagios $conf_file_dir $base_dir;
-      tar czvf $tarfile --no-recursion --exclude=.svn --exclude=man1 check_wmi_plus.pl check_wmi_plus_help.pl check_wmi_plus.README.txt $conf_file_dir/check_wmi_plus.conf.sample $wmi_ini_dir/* $wmi_data_dir $wmi_data_dir/check_wmi_plus.compiledini event_generic.pl check_wmi_plus.makeman.sh
+      tar czvf $tarfile --no-recursion --exclude=.svn --exclude=man1 --exclude=check_wmi_plus_pro.ini check_wmi_plus.pl check_wmi_plus_help.pl check_wmi_plus.README.txt $conf_file_dir/check_wmi_plus.conf.sample $wmi_ini_dir/* $wmi_data_dir $wmi_data_dir/check_wmi_plus.compiledini event_generic.pl check_wmi_plus.makeman.sh
+      # make the txt versions of commonly emailed files
+      mkdir cwp_txt_versions
+      cd cwp_txt_versions
+      cp ../check_wmi_plus.pl check_wmi_plus.pl.txt
+      cp ../check_wmi_plus_help.pl check_wmi_plus_help.pl.txt
+      cp ../check_wmi_plus_pro.pl check_wmi_plus_pro.pl.txt
       ";
    $output=`$cmd 2>&1`;
    print "CMD:$cmd\n\nOUTPUT:$output\n\n";
@@ -802,7 +812,12 @@ if ($opt_package) {
 }
 
 if ($opt_command_examples) {
-   show_command_examples("$wmi_ini_dir/$command_examples_ini_file{$opt_command_examples}");
+   if (exists($command_examples_ini_file{$opt_command_examples})) {
+      $debug && print "Example file for '$opt_command_examples' is $wmi_ini_dir/$command_examples_ini_file{$opt_command_examples}\n";
+      show_command_examples("$wmi_ini_dir/$command_examples_ini_file{$opt_command_examples}");
+   } else {
+      print "You need to supply a parameter argument from one of the following: " . Dumper(keys %command_examples_ini_file) . "\n";
+   }
    exit 0;
 }
 
@@ -827,7 +842,7 @@ if (!$opt_help && !$opt_texthelp && !$opt_inihelp) {
    };
    alarm($TIMEOUT);
 }
- 
+
 if ($the_arguments{'_bytefactor'}) {
    if ($the_arguments{'_bytefactor'} ne '1024' && $the_arguments{'_bytefactor'} ne '1000') {
       print "The BYTEFACTOR option must be 1024 or 1000. '$the_arguments{'_bytefactor'}' is not valid.\n";
@@ -926,8 +941,8 @@ if (defined($mode_list{$opt_mode})) {
          # there are 2 ways a section in the ini file is matched
          # 1) [MODE] - $opt_mode matches the whole section name
          # 2) [MODE SUBMODE] = $opt_mode is a Config::IniFiles Group and $opt_submode is a MemberName
-         # first see if there is a section named $opt_mode 
-   
+         # first see if there is a section named $opt_mode
+
          if ($wmi_ini->SectionExists($opt_mode)) {
             $debug && print "Found Section $opt_mode\n";
             $ini_section=$opt_mode;
@@ -948,14 +963,14 @@ if (defined($mode_list{$opt_mode})) {
                   $debug && print "Found Member $opt_submode\n";
                   $ini_section=$found_members[0];
                }
-               
+
             }
          }
       } else {
          print "INIFILE and/or INIDIR are set but there were no ini file(s) or an error occurred trying to read them.\n";
       }
       $use_pro_library && endtimer('Read INI Files');
-      
+
       if ($ini_section) {
          checkini($wmi_ini,$ini_section);
       } elsif ($opt_inihelp) {
@@ -1027,7 +1042,7 @@ return $versions_ok;
 }
 #-------------------------------------------------------------------------
 sub open_ini_file {
-# pass in 
+# pass in
 # the object that may already hold the ini file content
 my ($wmi_ini)=@_;
 
@@ -1038,9 +1053,9 @@ if ($ini_files_already_opened) {
 } else {
    # ini files not open so open them
    my $ini_file;
-   
+
    my $ini_is_new=0;
-   
+
    if ($use_pro_library && $use_compiled_ini_files) {
       # when using pro we can compile the ini files so that we don't have to open and parse them all everytime we run
       $debug && print "Trying to use Pro compiled ini files ....\n";
@@ -1051,19 +1066,19 @@ if ($ini_files_already_opened) {
          $debug && print "No existing Pro compiled ini file\n";
       }
    }
-   
+
    if (!$ini_file) {
-   
+
       $use_pro_library && starttimer('Open INI Files');
       $debug && print "Opening Ini Files ...\n";
-      
+
       if ($wmi_ini_file) {
-         # firstly open the ini file configured 
+         # firstly open the ini file configured
          $debug && print "   opening first ini file: $wmi_ini_file\n";
          $ini_file=new Config::IniFiles( -file=>$wmi_ini_file, -allowcontinue=>1 );
          $ini_is_new=1;
       }
-      
+
       if ($wmi_ini_dir) {
          # see what ini files are available in the dir
          my @ini_list=get_files_from_dir($wmi_ini_dir,'\.ini$');
@@ -1081,31 +1096,33 @@ if ($ini_files_already_opened) {
                $debug && print "   opening first ini file: $ini\n";
                $next_ini_file=new Config::IniFiles( -file=>"$wmi_ini_dir/$ini", -allowcontinue=>1);
             }
-            
+
             if (!defined($next_ini_file)) {
                # got an error parsing the ini file
                print "There is a problem reading the ini file: $ini. The error(s) are:\n" . join("\n",@Config::IniFiles::errors);
                finish_program($ERRORS{'UNKNOWN'});
             }
-            
+
             $ini_file=$next_ini_file;
             $ini_is_new=1;
          }
       }
       $use_pro_library && endtimer('Open INI Files');
    }
-   
+
    if ($ini_is_new && $use_pro_library && $use_compiled_ini_files) {
       # we've just read the ini files and we are using the pro library so we can compile them
       $debug && print "Trying to use Pro to compile ini files ....\n";
       compile_ini_files($ini_file);
    }
-   
+
    # check for variable defintions and load them to an array if found
-   my @tmp_array=$ini_file->val('variables','static','');
-   $use_pro_library && load_static_variables_from_array(\@tmp_array);
-   $debug && print "Global Static Ini Variables: " . Dumper(\%ini_static_variables);
-   
+   if (defined($ini_file)) {
+      my @tmp_array=$ini_file->val('variables','static','');
+      $use_pro_library && load_static_variables_from_array(\@tmp_array);
+      $debug && print "Global Static Ini Variables: " . Dumper(\%ini_static_variables);
+   }
+
    $ini_files_already_opened=1;
    return $ini_file;
 }
@@ -1132,7 +1149,7 @@ return $output;
 }
 #-------------------------------------------------------------------------
 sub show_command_examples {
-# pass in 
+# pass in
 # the name of the template file to process
 my ($example_file)=@_;
 
@@ -1164,7 +1181,7 @@ if ( -f $example_file) {
          } elsif ($line=~/^!A(.*)$/) {
             # this is a command argument
             $output="Command: <code>$base_command $1</code>\n";
-            
+
             my $cmd_output=`$base_command $1`;
             # remove final \n from commmand output
             $cmd_output=~s/\n$//;
@@ -1175,7 +1192,7 @@ if ( -f $example_file) {
             # plugin display output is everything else
             # by default enclose everything in blue font and then go and find the performance data
             $cmd_output="<font color=$variables{'display'}>$cmd_output</font>";
-            
+
             # if the $cmd_output contains a | followed by a \n then performance data is between | and \n
             if ($cmd_output=~/\|(.*?)\n/) {
                # close blue font and then start red
@@ -1186,15 +1203,15 @@ if ( -f $example_file) {
                # close blue font and then start red
                $cmd_output=~s/\|(.*)$/<\/font>\|<font color=$variables{'perf'}>$1/s;
             }
-            
+
             # if there are any [Triggered ...] brackets change their colour too
             if ($cmd_output=~/\[Triggered.*?\]/) {
                # close the existing <font> and start a new one
                $cmd_output=~s/(\[Triggered.*?\])/<\/font><font color=$variables{'trigger'}>$1<\/font><font color=$variables{'display'}>/gs;
             }
-            
+
             $output.="Output : <code>$cmd_output</code>";
-            
+
             if (! $opt_z) {
                # try and mask any user/password/host
                $output=~s/-H\s*(\S*?)\s/-H HOST /;
@@ -1203,11 +1220,11 @@ if ( -f $example_file) {
                # also hide the full path of the command (to make the display smaller)
                $output=~s/$exe_dir//;
             }
-            
+
          } else {
             $output="$line";
          }
-         
+
          if ($output ne 0) {
             print "$output\n";
          }
@@ -1249,7 +1266,7 @@ $term_width-=4;
 foreach my $ini_mode (sort @ini_modes) {
    my $query=$wmi_ini->val($ini_mode,'query','');
    # only do anything else if query is defined
-   
+
    if ($query) {
       my $inihelp=$wmi_ini->val($ini_mode,'inihelp','No help available');
 
@@ -1259,7 +1276,7 @@ foreach my $ini_mode (sort @ini_modes) {
          # defaults should be the same as that collected during check_ini
          my $number_wmi_samples=$wmi_ini->val($ini_mode,'samples',$default_inifile_number_wmi_samples);
          my $ini_delay=$wmi_ini->val($ini_mode,'delay',$default_inifile_delay);
-         
+
          # break up the ini_mode to MODE and SUBMODE and display them
          $ini_mode=~/^(\w+?)(\s+\w*?)*$/;
          my $inimode=$1 || '';
@@ -1276,7 +1293,7 @@ foreach my $ini_mode (sort @ini_modes) {
          # we used to have inihelp include the mode and submode in the actual text, so remove it if it is still there
          # remove everything up to the end of the first line of ========= and the \n
          $inihelp=~s/^(.*?)(==)(=*\n)(.*?)$/$4/s;
-         
+
          # make sure each line in $inihelp starts with exactly 3 spaces to ensure proper formatting when shown as a manpage
          $inihelp=~s/^(\s*)(.*?)$/   $2/mg;
 
@@ -1289,16 +1306,16 @@ foreach my $ini_mode (sort @ini_modes) {
          }
 
          $display=" $title $extra_title  \n$requires_text$inihelp\n";
-         
+
          # add automatic information about the DELAY parameter
          if ($number_wmi_samples>1) {
             $display.="\n   $default_help_text_delay Default is $ini_delay.\n";
          } else {
             # delay not required or meaningful for this MODE
          }
-         
+
          $display.=show_warn_crit_field_info($wmi_ini,$ini_mode);
-         
+
       } else {
          # we like to format our inihelp with a line as the title then a line full of ========= and then the text
          # lets only show the text, by removing the first stuff if it exists
@@ -1308,9 +1325,9 @@ foreach my $ini_mode (sort @ini_modes) {
          $inihelp=~s/( +)/ /sg;
          # remove leading spaces
          $inihelp=~s/^( *)//sg;
-      
-         $display="$ini_mode - $inihelp";            
-         
+
+         $display="$ini_mode - $inihelp";
+
          # if it is longer than $term_width chars then add .. to the end and truncate it to make it no longer than $term_width chars
          $display=~s/^(.{$term_width,$term_width})(.+){1,}$/$1\.\.\./s;
       }
@@ -1344,7 +1361,7 @@ if ($uptime_string=~/^[0-9\.]+$/) {
    }
    $new_uptime_string="$day_info " . sprintf("%02d:%02d:%02d (%smin)",$hours,$mins,$uptime,$uptime_minutes);
 }
-return $new_uptime_string; 
+return $new_uptime_string;
 }
 #-------------------------------------------------------------------------
 sub scaled_bytes {
@@ -1355,13 +1372,13 @@ if ($incoming ne '' && looks_like_number($incoming)) {
    # this is about half the speed BUT looks nicer an we don't use it that much to make a speed difference
    my %options=(
       precision => 3,         # hard coded precision - should be ok
-      base      => $actual_bytefactor, 
+      base      => $actual_bytefactor,
    );
    return format_bytes($incoming,%options);
 
    ## from http://www.perlmonks.org/?node_id=378538
    ## very cool
-   ## modified a little to protect against uninitialised variables and to remove the byte unit 
+   ## modified a little to protect against uninitialised variables and to remove the byte unit
    #(sort { length $a <=> length $b }
    #map { sprintf '%.3f%s', $incoming/$actual_bytefactor**$_->[1], $_->[0] }
    #[""=>0],[K=>1],[M=>2],[G=>3],[T=>4],[P=>5],[E=>6])[0]
@@ -1387,7 +1404,7 @@ sub get_wmi_data {
 #     - array index [QUERYNUMBER][0] prefixed by _ColSum_fieldname which sums up all the fieldnames (columns) for multiple rows in a single query number QUERYNUMBER
 # set $slash_conversion to 1 if we should replace all / in the WMI query with \\
 
-# we return 
+# we return
 # 1) an empty string if it worked ok, a msg if it failed
 # 2) the index of in the array of where the latest data is stored
 
@@ -1448,7 +1465,7 @@ if ($slash_conversion) {
    # replace any / in the WMI query \\ since \ are difficult to use in linux on the command line
    # we replace it with \\ to pass an actual \ to the csmmand line
    # use # as the delimiter for the regex to make it more readable (still need to escape / and \ though)
-   $wmi_query=~s#\/#\\\\#g;   
+   $wmi_query=~s#\/#\\\\#g;
 }
 
 # How to use an alternate namespace using wmic
@@ -1461,7 +1478,7 @@ if ($wmic_delimiter ne '|') {
 
 # build up the extra wmic arguments if defined
 if ($#opt_extra_wmic_args>=0) {
-   # Each array index should contain a complete argument for wmic eg --option=#client ntlmv2 auth#=Yes 
+   # Each array index should contain a complete argument for wmic eg --option=#client ntlmv2 auth#=Yes
    # To save difficulty with quoting we translate # into "
    # So --option=#client ntlmv2 auth#=Yes becomes --option="client ntlmv2 auth"=Yes
    foreach my $arg (@opt_extra_wmic_args) {
@@ -1480,7 +1497,8 @@ if ($host_os =~ m/win32$/i) {
 }
 
 # if user name/password specified they always override the auth file
-if ($opt_username && $opt_password) {
+# only check for the username so that this allows an empty password
+if ($opt_username) {
    push(@wmi_args,'-U',"${opt_username}%${opt_password}");
 } elsif ($opt_auth_file) {
    # quick check on the auth file
@@ -1570,7 +1588,7 @@ if ($opt_keep_state && $num_samples>1) {
             finish_program($ERRORS{'UNKNOWN'});
          }
       }
-      
+
       # now check expiry
       $debug && print "Checking previous data's expiry - Timestamp $$stored_results[0][0]{'_KeepStateCreateTimestamp'} vs Expiry After $expiry_limit (Keep State Expiry setting is ${opt_keep_state_expiry}sec)\n";
       if (defined($$stored_results[0][0]{'_KeepStateCreateTimestamp'})) {
@@ -1585,10 +1603,10 @@ if ($opt_keep_state && $num_samples>1) {
             $get_data_for_the_first_time='';
             $start_wmi_query_number=1; # dont start at 0 (since we already have that data)
             $keep_state_mode=2;
-            
+
             $debug && print "Using Existing WMI DATA of:" . Dumper($stored_results);
             $$results[0]=$$stored_results[0];
-            
+
             # fudge delay parameter so that it the time between runs, instead of what was set on the command line
             $the_arguments{'_delay'}=$time_now-$$stored_results[0][0]{'_KeepStateCreateTimestamp'};
             # set the sample period into the results so that we can display it
@@ -1623,8 +1641,8 @@ foreach my $field_name (@{$provide_sums}) {
 # 0 is the first one, 1 the second one etc
 for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
    # record the index where we are storing the latest WMI data
-   $final_data_array_index=$i; 
-   
+   $final_data_array_index=$i;
+
    if ($debug) {
       # mask the user name and password in the wmic command, but not if $opt_z is set
       my $cmd=$wmi_commandline;
@@ -1645,13 +1663,13 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
    if ($opt_use_cached_wmic_response || $use_cached_wmic_responses) {
       # if this option is set then we want to use the cached wmic response and not actually call wmic itself
       # we can only used the cached response if the cache file for this check exists
-      
+
       # build up the cache file name
       $wmic_cache_file="cwpwc_${opt_mode}_${opt_submode}_${the_arguments{'_host'}}_${the_arguments{'_arg1'}}_${the_arguments{'_arg2'}}_${the_arguments{'_arg3'}}.${opt_keep_state_id}";
       $wmic_cache_file=~s/\W*//g;
       $wmic_cache_file="$tmp_dir/$wmic_cache_file.wmiccache";
       $debug && print "WMIC Cache File Name: $wmic_cache_file\n";
-      
+
       if ( -f $wmic_cache_file) {
          my $last_results_ref;
          eval {   $last_results_ref=retrieve($wmic_cache_file);   };
@@ -1671,7 +1689,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
          $debug && print "No existing WMIC response, will cache this one\n";
       }
    }
-   
+
    if ($run_wmic) {
       $global_wmic_call_counter++;
       if ($test_run && $test_wmic_file_base) {
@@ -1715,7 +1733,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
             store($out,$wmic_cache_file);
          };
          check_for_store_errors($@);
-         
+
       }
    }
 
@@ -1747,7 +1765,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
    # 1) the query works fine and returns data - this looks like above
    # 2) the query worked but found no data eg you are looking for specific process names then $output will be empty
    # 3) an error occurred - the error message is returned
-   
+
    if ($output eq '') {
       # the query probably worked but just returned no data
       # lets set some variables
@@ -1757,14 +1775,14 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
       # now we have 2 possibilities left
       # 1) good results formatted nicely
       # 2) errors
-      
+
       my $class_row_content='';
       if ($output=~/(CLASS: \w+)\n/sg) {
          # looks like we have some results
          # sometimes the CLASS line repeats, so we store it for later
          $class_row_content=$1;
          $debug && print "Storing Class Row:$class_row_content\n";
-         
+
          # now, if $column_name_regex is specified then we have to use the regex to look for the column names
          # else we just look for the next line and split it on |
          my $got_header=0;
@@ -1777,7 +1795,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                $got_header=1;
                my $j=0;
                # I'd really like to use a perl 5.10 construct here (Named Capture buffers ie the hash $+) to make it much nicer code but have decided to do it an ugly way to accomodate older versions
-               # so now we have to go through $1, $2 one at a time in a hardcoded fashion (is there a better way to do this?) 
+               # so now we have to go through $1, $2 one at a time in a hardcoded fashion (is there a better way to do this?)
                # this places a hard limit on the number of fields we can find in our regex
                # of course this is only a problem if you need to specify a specific regex to find your field data in the WMI results
                #------------------------------------------------------
@@ -1813,7 +1831,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                $$results[0][0]{'_ChecksOK'}++;
             }
          }
-         
+
          if ($got_header) {
             # since we have the header titles we can now look for the data
             # just like the column titles the user might have specified a regex to find the fields
@@ -1821,7 +1839,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
             # eg the page file query - 3 fields in the title and 5 fields in the data!
             #CLASS: Win32_OperatingSystem
             #FreePhysicalMemory|Name|TotalVisibleMemorySize
-            #515204|Microsoft Windows XP Professional|C:\WINDOWS|\Device\Harddisk0\Partition1|1228272   
+            #515204|Microsoft Windows XP Professional|C:\WINDOWS|\Device\Harddisk0\Partition1|1228272
             my $use_split=1;
             my $field_finding_regex='(.*?)\n'; # this is the default
             my %keep_certain_fields=();
@@ -1836,7 +1854,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   foreach my $field (split(',',$value_regex)) {
                      $keep_certain_fields{$field}=1;
                   }
-                  # adjust the number of 
+                  # adjust the number of
                   $debug && print "KEEP ONLY THESE FIELDS=$value_regex\n";
                } else {
                   # we assume that this is a regex
@@ -1845,7 +1863,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   $debug && print "Using Custom Regex to find FIELDS\n";
                }
             }
-            
+
             # now loop through the returned records
             $debug && print "Now looking for $field_finding_regex (use_split=$use_split)\n";
             my $found=0;
@@ -1858,7 +1876,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                $debug && print "\nLooking at Data Row: $&";
                if ($use_split) {
                   @field_data=split(/$wmic_split_delimiter/,$row_data);
-                  
+
                   # check that the row data looks valid
                   # to be valid
                   # 1) the row should have the same number of fields (it can be up to only 1 field less) as the header row (there have been reports that the CLASS: line and/or the header line repeats throughout the content
@@ -1880,7 +1898,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                         }
                         if ($use_field) {
                            $debug && print "COLNAME=$column_names[$header_field_number],FIELD=$field\n";
-                           # If you got the regex wrong or some fields come back with | in them you will get 
+                           # If you got the regex wrong or some fields come back with | in them you will get
                            # "Use of uninitialized value within @column_names in hash element" error when using $column_names[$header_field_number]
                            # hence use $column_names[$header_field_number]||''
 
@@ -1890,7 +1908,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                            }
 
                            $$results[$i][$found]{$column_names[$header_field_number]||''}=$field;
-                           # only increment the header field number when we use it 
+                           # only increment the header field number when we use it
                            $header_field_number++;
                         }
                         # always increment the data field number
@@ -1912,7 +1930,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                   foreach my $regex_field (@hardcoded_field_list) {
                      $debug && print "$regex_field, ";
                      if ($regex_field ne '') {
-                        # If you got the regex wrong or some fields come back with | in them you will get 
+                        # If you got the regex wrong or some fields come back with | in them you will get
                         # "Use of uninitialized value within @column_names in hash element" error when using $column_names[$j]
                         # hence use $column_names[$j]||''
                         $$results[$i][$found]{$column_names[$j]||''}=$regex_field;
@@ -1920,7 +1938,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                      $j++;
                   }
                }
-               
+
                # only process and count as found if the row data is valid
                $debug && print "Row Data Valid = $row_data_valid\n";
                if ($row_data_valid) {
@@ -1937,6 +1955,10 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
                      # this sum, sums up all the $field_names (columns) within a single query - ie where multiple rows are returned
                      $$results[$i][0]{"_ColSum_$field_name"}+=$$results[$i][$found]{$field_name};
                   }
+                  # apply static variable substituions if any on the values (this is a reverse substitute to turn a value into a name)
+                  # we do it here so that it looks like the WMI query is returning the substituted values and the plugin is then operating on substituted values
+                  $use_pro_library && scalar keys %ini_static_variables && substitute_static_variables_hash(1,$$results[$i][$found],'raw wmi data');
+
                   # increment the results counter for this query
                   $found++;
                } else {
@@ -1949,19 +1971,19 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
             $debug && print "Could not find the column title line\n";
             $failure++;
          }
-         
+
       } else {
          $debug && print "Could not find the CLASS: line - an error occurred\n";
          $failure++;
       }
    }
-      
+
    if ($i+1!=$num_samples) {
       # only need to sleep the first time round and its not the last
       $debug && print "Sleeping for $$specified_delay seconds ... ($i,$num_samples)\n";
       sleep $$specified_delay;
    }
-   
+
 }
 
 $debug && print "WMI DATA:" . Dumper($results);
@@ -2002,7 +2024,7 @@ if ($keep_state_mode==1) {
    # each WMI query already has an ItemCount, if this is set to at least 1 then the query was ok
    if (defined($$stored_results[0][0]{'_ItemCount'})) {
       if ($$stored_results[0][0]{'_ItemCount'} ge 1) {
-         $$stored_results[0][0]{'_ChecksOK'}=1; 
+         $$stored_results[0][0]{'_ChecksOK'}=1;
       }
    }
    $debug && print "Storing new WMI results in the state file " . Dumper($stored_results);
@@ -2027,7 +2049,7 @@ if ($final_data_array_index>0) {
    delete $$results[0][0]{'_ChecksOK'};
    delete $$results[0][0]{'_KeepStateCreateTimestamp'};
    delete $$results[0][0]{'_KeepStateSamplePeriod'};
-   
+
    # Those first ones were easy since they are always in the same place
    # Now we want to get any _QuerySum fields
    # They are always in WMI query #zero as well but can be in each row of the result set, plus the field name starts with _QuerySum
@@ -2147,7 +2169,7 @@ foreach my $field (@{$display_fields}) {
    # 1) FIELD|UNITS|DISPLAY|SEP|DELIM|START|END
    # 2) FIELD|UNITS
    # 3) FIELD
-   
+
    if ($field=~/^(.*)\|(.*)\|(.*)\|(.*)\|(.*)\|(.*)\|(.*)$/) {
       $debug && print "Complex Format:$1,$2,$3,$4,$5,$6,$7\n";
       $this_real_field_name=$1;
@@ -2168,12 +2190,12 @@ foreach my $field (@{$display_fields}) {
       $this_real_field_name=$1;
       $this_unit=$2;
       $this_display_field_name=$this_real_field_name;
-      
+
    } elsif ($field!~/\|/) { # no | characters
       $debug && print "Field Only Format:$field\n";
       $this_real_field_name=$field;
       $this_display_field_name=$this_real_field_name;
-      
+
    } else {
       print "Invalid Display FIELD Specification: $field\n";
    }
@@ -2186,7 +2208,7 @@ foreach my $field (@{$display_fields}) {
       $this_start_bracket=~s/\{(.*?)\}/$$values{$1}/g;
       $this_end_bracket=~s/\{(.*?)\}/$$values{$1}/g;
    }
-  
+
    $debug>=2 && print "Loading up value using FIELD=$this_real_field_name\n";
    # now we can extract the value
    if (defined($$values{$this_real_field_name})) {
@@ -2194,7 +2216,7 @@ foreach my $field (@{$display_fields}) {
    } else {
       $this_value='NO_WMI_DATA';
    }
-   
+
    # now see if we need to change the display value/unit
    # by default we expect this just to be UNIT
    # However, if prefixed with a # ie #UNIT eg #B, then we apply scaling to the UNIT
@@ -2203,10 +2225,11 @@ foreach my $field (@{$display_fields}) {
       $this_value=scaled_bytes($this_value);
       $this_unit=$1;
    }
-   
-   # apply static variable substituions if any on the values (this is a reverse subtitute to turn a value into a name)
-   $use_pro_library && substitute_static_variables(1,\$this_value,$this_real_field_name);
-   
+
+   # apply static variable substituions if any on the values (this is a reverse substitute to turn a value into a name)
+   # no longer needed as substitutions now occur at source ie wmi data collection
+   # $use_pro_library && substitute_static_variables(1,\$this_value,$this_real_field_name,'display and performance data');
+
    $debug && print "$field ----> $this_start_bracket$this_display_field_name$this_sep$this_value$this_unit$this_end_bracket$this_delimiter\n";
    $display_string.="$this_start_bracket$this_display_field_name$this_sep$this_value$this_unit$this_end_bracket$this_delimiter";
 }
@@ -2228,19 +2251,19 @@ foreach my $field (@{$performance_data_fields}) {
    # 1) FIELD|UNITS|DISPLAY
    # 2) FIELD|UNITS
    # 3) FIELD
-   
+
    if ($field=~/^(.*)\|(.*)\|(.*)$/) {
       $debug && print "Complex Format:$1,$2,$3\n";
       $this_real_field_name=$1;
       $this_unit=$2;
       $this_display_field_name=$3;
-      
+
    } elsif ($field=~/^(.*)\|(.*)$/) {
       $debug && print "Simple Format:$1,$2\n";
       $this_real_field_name=$1;
       $this_unit=$2;
       $this_display_field_name=$this_real_field_name;
-      
+
    } elsif ($field!~/\|/) { # no | characters
       $debug && print "Field Only Format:$field\n";
       $this_real_field_name=$field;
@@ -2253,7 +2276,7 @@ foreach my $field (@{$performance_data_fields}) {
    # eg this replaces {DeviceID} by the value held in $$values{'DeviceID'}
    $this_display_field_name=~s/\{(.*?)\}/$$values{$1}/g;
    $this_unit=~s/\{(.*?)\}/$$values{$1}/g;
-   
+
    # $debug && print "Loading up value using FIELD=$this_real_field_name\n";
    # now we can extract the value
    if (defined($$values{$this_real_field_name})) {
@@ -2267,7 +2290,7 @@ foreach my $field (@{$performance_data_fields}) {
             $this_value=scaled_bytes($this_value);
             $this_unit=$1;
          }
-         
+
          # more protection against uninitialised variables!
          # in this case if you have a field specified for perf data which does not exist in the WMI class or fails to get calculated <---- I think that's the case
          # it also only happens if the field is specified as a performance data field AND not as a warn/critical field
@@ -2279,7 +2302,7 @@ foreach my $field (@{$performance_data_fields}) {
          if (defined($$critical_specs{$this_real_field_name})) {
             $crit_perf_spec=$$critical_specs{$this_real_field_name};
          }
-   
+
          $debug && print "$field (Field=$this_real_field_name) ----> '$this_display_field_name'=$this_value$this_unit;$warn_perf_spec;$crit_perf_spec; \n";
          # we always add a space at the end of the performance data to make sure it is separated from any following performance data
          $performance_data_string.="'$this_display_field_name'=$this_value$this_unit;$warn_perf_spec;$crit_perf_spec; ";
@@ -2302,7 +2325,7 @@ while ($performance_data_string=~s/;; /; /g) {}
 $debug && print "---------- Done\n";
 
 my $combined_string=combine_display_and_perfdata($display_string,$performance_data_string);
- 
+
 if ($opt_show_fields) {
    # user has asked to see all the fields that this check uses
    # this is normally only run when the user is tryigng to work out what fields they can use in a specific check
@@ -2327,7 +2350,7 @@ sub no_data_check {
 # the number of items returned in the WMI query ie the value of _ItemCount
 my ($itemcount)=@_;
 if ($the_arguments{'_nodatamode'}) {
-   # this means that the users wants to test eg ItemCount using warn/crit criteria 
+   # this means that the users wants to test eg ItemCount using warn/crit criteria
    # so we will not do our default behaviour
    # default behaviour is to go warning/critical if the $itemcount==0 ie no data was returned
    # this might mean that some other values might not be initialised so you will need to initialise them within each check before you call this sub eg for checkfilesize the value of FileSize will not get set if we do not find the file
@@ -2349,7 +2372,7 @@ if ($the_arguments{'_nodatamode'}) {
 #-------------------------------------------------------------------------
 sub check_for_invalid_calculation_result {
 # check calculated field results for validity
-# pass in 
+# pass in
 # a value by reference (so we can change it in place)
 my ($result)=@_;
 # sometimes on virtual machines, because of clock problems, it is possible to get negative numbers. Just make it zero.
@@ -2389,14 +2412,14 @@ eval {
 # functions can be some function name I define or we also use the WMI Raw data types eg PERF_100NSEC_TIMER_INV
 if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # refer http://technet.microsoft.com/en-us/library/cc757283%28WS.10%29.aspx
-   # this is a calculation like for checkcpu found on 
+   # this is a calculation like for checkcpu found on
    # it requires two completed WMI queries (sample=2)
    # Formula = (1- (   (N2 - N1) / (D2 - D1) /F   )) x 100
    # we assume that the Timefield (D) we need is Timestamp_Sys100NS
-   # 
+   #
    # the parameters for this "function" are
    # SOURCEFIELD,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
    # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
    # MAXIMUM VALUE [2] - the maximum value that this "function" will return (optional)
@@ -2407,9 +2430,9 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    if ($$wmidata[$query_index][0]{'_ChecksOK'}>=2) {
       my @parameter=split(',',$function_parameters);
       if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]})) {
-         $debug && print "Core Calc: (1 - ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         $debug && print "Core Calc: (1 - ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                            ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  ) * 100 = ";
-         $final_result=(1 - ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         $final_result=(1 - ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                            ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  ) * 100;
          check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
@@ -2435,10 +2458,10 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # it requires two completed WMI queries (sample=2)
    # Formula = (Nx - N0) / (Dx - D0) x 100
    # we assume that the Timefield (D) we need is Timestamp_Sys100NS
-   # 
+   #
    # the parameters for this "function" are
    # SOURCEFIELD,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
    # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
    # MAXIMUM VALUE [2] - the maximum value that this "function" will return (optional)
@@ -2449,9 +2472,9 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    if ($$wmidata[$query_index][0]{'_ChecksOK'}>=2) {
       my @parameter=split(',',$function_parameters);
       if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]})) {
-         $debug && print "Core Calc: (  ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         $debug && print "Core Calc: (  ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                            ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  ) * 100 = ";
-         $final_result=(  ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         $final_result=(  ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                            ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  ) * 100;
          check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
@@ -2478,10 +2501,10 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # Formula = (Nx - N0) / ((Dx - D0) / F)
    # we assume that the Timefield (D) we need is Timestamp_Sys100NS
    # we assume that the Frequency (F) we need is Frequency_Sys100NS
-   # 
+   #
    # the parameters for this "function" are
    # SOURCEFIELD,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
    # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
    #
@@ -2491,9 +2514,9 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    if ($$wmidata[$query_index][0]{'_ChecksOK'}>=2) {
       my @parameter=split(',',$function_parameters);
       if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]})) {
-         $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                        (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} ) = ";
-         $final_result=($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         $final_result=($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                        (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} ) ;
          check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
@@ -2516,10 +2539,10 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # Formula = ((Nx - N0)/F ) / ((Dx - D0) )
    # we assume that the Timefield (D) we need is Timestamp_Sys100NS
    # we assume that the Frequency (F) we need is Frequency_Sys100NS
-   # 
+   #
    # the parameters for this "function" are
    # SOURCEFIELD,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
    # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
    #
@@ -2530,19 +2553,19 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       my @parameter=split(',',$function_parameters);
       if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]})) {
 #         Old Calc which has the timestamp as the denominator - new calc inverts it
-#         $debug && print "OLD Core Calc: ( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} ) / 
+#         $debug && print "OLD Core Calc: ( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} ) /
 #                       (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) ) = ";
 #         # old - maybe incorrect
-#         $final_result=( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/ 
+#         $final_result=( ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/
 #                       (    ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) ) ;
          # divide by zero protection
-         $debug && print "Core Calc: ( ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/ 
+         $debug && print "Core Calc: ( ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/
                        (    ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) ) = ";
          if (  ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]})==0  ) {
-           $debug && print "Denominator is zero - cannot calculate result - forcing result to zero\n"; 
+           $debug && print "Denominator is zero - cannot calculate result - forcing result to zero\n";
            $final_result=0;
          } else {
-            $final_result=( ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/ 
+            $final_result=( ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS})  /  $$wmidata[$query_index][$which_row]{Frequency_Sys100NS} )/
                        (    ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) ) ;
          }
          check_for_invalid_calculation_result(\$final_result);
@@ -2567,7 +2590,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    #
    # the parameters for this "function" are
    # SOURCEFIELD_N,SOURCEFIELD_D,MULTIPLIER,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
    # SOURCEFIELD [1] is the WMI Field to base this on - required
    # MULTIPLIER [2] is a multiplier useful to make the fraction a percentage eg 100 - probably set to 1 for PERF_AVERAGE_BULK and set to 100 for PERF_SAMPLE_FRACTION
@@ -2579,14 +2602,14 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    if ($$wmidata[$query_index][0]{'_ChecksOK'}>=2) {
       my @parameter=split(',',$function_parameters);
       if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]}) && looks_like_number($$wmidata[$query_index][$which_row]{$parameter[1]})) {
-         $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                        ($$wmidata[$query_index][$which_row]{$parameter[1]} - $$wmidata[0][$which_row]{$parameter[1]}) = ";
          # divide by zero protection
          if (  ($$wmidata[$query_index][$which_row]{$parameter[1]} - $$wmidata[0][$which_row]{$parameter[1]})==0  ) {
-           $debug && print "Denominator is zero - cannot calculate result - forcing result to zero\n"; 
+           $debug && print "Denominator is zero - cannot calculate result - forcing result to zero\n";
            $final_result=0;
          } else {
-            $final_result=($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+            $final_result=($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                        ($$wmidata[$query_index][$which_row]{$parameter[1]} - $$wmidata[0][$which_row]{$parameter[1]});
          }
          check_for_invalid_calculation_result(\$final_result);
@@ -2614,10 +2637,10 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    #
    # REfer http://technet.microsoft.com/en-us/library/cc781696%28WS.10%29.aspx for PERF_COUNTER_100NS_QUEUELEN_TYPE
    # This one seems to give correct results calculated like this but has a slightly different formula on the reference page?
-   # 
+   #
    # the parameters for this "function" are
    # SOURCEFIELD,MULTIPLIER,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
    # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
    # MULTIPLIER [2] is a multiplier useful to make the fraction a percentage eg 100
@@ -2629,9 +2652,9 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    if ($$wmidata[$query_index][0]{'_ChecksOK'}>=2) {
       my @parameter=split(',',$function_parameters);
       if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]})) {
-         $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                        ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS}) = ";
-         $final_result=($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) / 
+         $final_result=($$wmidata[$query_index][$which_row]{$parameter[0]} - $$wmidata[0][$which_row]{$parameter[0]}) /
                        ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[0][$which_row]{Timestamp_Sys100NS});
          check_for_invalid_calculation_result(\$final_result);
          $debug && print " $final_result\n";
@@ -2662,7 +2685,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    #
    # the parameters for this "function" are
    # SOURCEFIELD,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD [0] is the WMI Field to base this on eg PercentProcessorTime - required
    # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
    #
@@ -2670,9 +2693,9 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # this function requires only 1 WMI data result set. don't worry about checking it
    my @parameter=split(',',$function_parameters);
    if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]})) {
-      $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[$query_index][$which_row]{$parameter[0]}) / 
+      $debug && print "Core Calc: ($$wmidata[$query_index][$which_row]{Timestamp_Sys100NS} - $$wmidata[$query_index][$which_row]{$parameter[0]}) /
                     $$wmidata[$query_index][$which_row]{Timestamp_Object} = ";
-      $final_result=($$wmidata[$query_index][$which_row]{Timestamp_Object} - $$wmidata[$query_index][$which_row]{$parameter[0]}) / 
+      $final_result=($$wmidata[$query_index][$which_row]{Timestamp_Object} - $$wmidata[$query_index][$which_row]{$parameter[0]}) /
                     $$wmidata[$query_index][$which_row]{Frequency_Sys100NS};
       check_for_invalid_calculation_result(\$final_result);
       $debug && print " $final_result\n";
@@ -2685,10 +2708,10 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
 } elsif ($function eq 'percent') {
-   # it requires one completed WMI queries 
+   # it requires one completed WMI queries
    # the parameters for this "function" are
    # SOURCEFIELD1,SOURCEFIELD2,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD1 [0] is a WMI field name which contains some number
    # SOURCEFIELD2 [1] is a WMI field name which contains some number
    # SPRINTF_SPEC [2] - a format specification passed directly to sprintf to format the result (can leave blank)
@@ -2717,13 +2740,13 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
 } elsif ($function eq 'basicmaths') {
-   # it requires one completed WMI queries 
+   # it requires one completed WMI queries
    # the parameters for this "function" are
    # SOURCEFIELD1,OPERATOR,SOURCEFIELD2,SPRINTF_SPEC
-   # where 
-   # SOURCEFIELD1 [0] is a WMI field name which contains some number or just a number 
+   # where
+   # SOURCEFIELD1 [0] is a WMI field name which contains some number or just a number
    # OPERATOR     [1] is one of + - * /
-   # SOURCEFIELD2 [2] is a WMI field name which contains some number or just a number 
+   # SOURCEFIELD2 [2] is a WMI field name which contains some number or just a number
    # SPRINTF_SPEC [3] - a format specification passed directly to sprintf to format the result (can leave blank)
    # Formula is SOURCEFIELD1 OPERATOR SOURCEFIELD2
    # eg 2 * 3
@@ -2744,7 +2767,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       $second_value=$$wmidata[$query_index][$which_row]{$parameter[2]};
       $debug && print "BasicMaths: Assuming that the specified value ($parameter[2]) is actually a WMI Field name and hence using the value '$second_value' for the calculation\n";
    }
-   
+
    if (looks_like_number($first_value) && looks_like_number($second_value)) {
       $debug && print "Core Calc: $first_value $parameter[1] $second_value = ";
       if ($parameter[1] eq '+') {
@@ -2766,11 +2789,11 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
 } elsif ($function eq 'v_real32tofloat') {
-   # it requires one completed WMI queries 
+   # it requires one completed WMI queries
    # the parameters for this "function" are
    # SOURCEFIELD1,SPRINTF_SPEC
-   # where 
-   # SOURCEFIELD1 [0] is a WMI field name which contains some number or just a number 
+   # where
+   # SOURCEFIELD1 [0] is a WMI field name which contains some number or just a number
    # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
    #
    my $final_result='CALC_FAIL';
@@ -2783,10 +2806,41 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
       $first_value=$$wmidata[$query_index][$which_row]{$parameter[0]};
       $debug && print "v_real32tofloat: Assuming that the specified value ($parameter[0]) is actually a WMI Field name and hence using the value '$first_value' for the calculation\n";
    }
-   
+
    if (looks_like_number($first_value)) {
       $debug && print "Core Calc: v_real32tofloat $first_value = ";
       $final_result=unpack "f", pack "L", $first_value;
+      $debug && print " $final_result\n";
+      if ($parameter[1]) {
+         $final_result=sprintf($parameter[1],$final_result);
+      }
+   } else {
+      $debug && print "WARNING: The value in one of the requested fields ($parameter[0]) does not look like a number - we got '$first_value'\n";
+   }
+   $debug && print "   Setting $newfield to $final_result\n";
+   $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
+} elsif ($function eq 'v_real64tofloat') {
+   # it requires one completed WMI queries
+   # the parameters for this "function" are
+   # SOURCEFIELD1,SPRINTF_SPEC
+   # where
+   # SOURCEFIELD1 [0] is a WMI field name which contains some number or just a number
+   # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
+   #
+   my $final_result='CALC_FAIL';
+   # this function requires only 1 WMI data result set. don't worry about checking it
+   my @parameter=split(',',$function_parameters);
+
+   my $first_value=$parameter[0];
+   if (!looks_like_number($first_value)) {
+      # assume it is actually a WMI field name and so use the value in the field
+      $first_value=$$wmidata[$query_index][$which_row]{$parameter[0]};
+      $debug && print "v_real64tofloat: Assuming that the specified value ($parameter[0]) is actually a WMI Field name and hence using the value '$first_value' for the calculation\n";
+   }
+
+   if (looks_like_number($first_value)) {
+      $debug && print "Core Calc: v_real64tofloat $first_value = ";
+      $final_result=unpack "d", pack "L", $first_value;
       $debug && print " $final_result\n";
       if ($parameter[1]) {
          $final_result=sprintf($parameter[1],$final_result);
@@ -2800,7 +2854,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # it requires one completed WMI query
    # the parameters for this "function" are
    # SOURCEFIELD1
-   # where 
+   # where
    # SOURCEFIELD1 [0] is a WMI timestamp like 20100528105127.000000+600
    # This timestamp is a GMT time, we convert it to an age in seconds
    #
@@ -2821,7 +2875,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # it requires one completed WMI query
    # the parameters for this "function" are
    # SOURCEFIELD1,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD1 [0] is a number of seconds
    # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
    #
@@ -2846,7 +2900,7 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    # it requires one completed WMI query
    # the parameters for this "function" are
    # SOURCEFIELD1,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD1 [0] is a number of KB
    # SPRINTF_SPEC [1] - a format specification passed directly to sprintf to format the result (can leave blank)
    #
@@ -2867,14 +2921,14 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
 } elsif ($function eq 'HYPERV_TOTALVM_MEMORY') {
    # used for calculating HyperV memory
-   # customfield=_almost_total_vm_memory,HYPERV_TOTALVM_MEMORY,Value1GGPApages,Value2MGPApages,Value4KGPApages,DepositedPages 
-   # select Name,Value1GGPApages,Value2MGPApages,Value4KGPApages,DepositedPages from Win32_PerfRawData_HvStats_HyperVHypervisorPartition 
+   # customfield=_almost_total_vm_memory,HYPERV_TOTALVM_MEMORY,Value1GGPApages,Value2MGPApages,Value4KGPApages,DepositedPages
+   # select Name,Value1GGPApages,Value2MGPApages,Value4KGPApages,DepositedPages from Win32_PerfRawData_HvStats_HyperVHypervisorPartition
    # it requires 1 completed WMI queries (sample=1)
    # almost_total_vm_memory = "1G GPA Pages" * 1024 + ("2M GPA Pages" * 2) + (("4K GPA Pages" + "Deposited pages") / 256)
-   # 
+   #
    # the parameters for this "function" are
    # Value1GGPApages,Value2MGPApages,Value4KGPApages,DepositedPages,SPRINTF_SPEC
-   # where 
+   # where
    # Value1GGPApages [0] is the WMI Field for 1G pages - required
    # Value2MGPApages [1] is the WMI Field for 2M pages - required
    # Value4KGPApages [2] is the WMI Field for 4K pages - required
@@ -2884,11 +2938,11 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    my $final_result='CALC_FAIL';
    my @parameter=split(',',$function_parameters);
    if (looks_like_number($$wmidata[$query_index][$which_row]{$parameter[0]})) {
-      $debug && print "Core Calc: $$wmidata[$query_index][$which_row]{$parameter[0]} * 1024 + 
-                     ($$wmidata[$query_index][$which_row]{$parameter[1]} * 2) + 
+      $debug && print "Core Calc: $$wmidata[$query_index][$which_row]{$parameter[0]} * 1024 +
+                     ($$wmidata[$query_index][$which_row]{$parameter[1]} * 2) +
                      (($$wmidata[$query_index][$which_row]{$parameter[2]} + $$wmidata[$query_index][$which_row]{$parameter[3]}) / 256) = ";
-      $final_result=$$wmidata[$query_index][$which_row]{$parameter[0]} * 1024 + 
-                     ($$wmidata[$query_index][$which_row]{$parameter[1]} * 2) + 
+      $final_result=$$wmidata[$query_index][$which_row]{$parameter[0]} * 1024 +
+                     ($$wmidata[$query_index][$which_row]{$parameter[1]} * 2) +
                      (($$wmidata[$query_index][$which_row]{$parameter[2]} + $$wmidata[$query_index][$which_row]{$parameter[3]}) / 256);
       $debug && print " $final_result\n";
       if ($parameter[4]) {
@@ -2900,10 +2954,10 @@ if ($function eq 'PERF_100NSEC_TIMER_INV') {
    $debug && print "   Setting $newfield to $final_result\n";
    $$wmidata[$query_index][$which_row]{$newfield}=$final_result;
 } elsif ($function eq 'test') {
-   # it requires one completed WMI queries 
+   # it requires one completed WMI queries
    # the parameters for this "function" are
    # SOURCEFIELD1SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD1 [0] is some number
    # Formula is 1 * SOURCEFIELD1
    #
@@ -2944,7 +2998,7 @@ if ($@) {
 #-------------------------------------------------------------------------
 sub process_custom_fields_list {
 # run through a list of custom field parameters from an ini file and create the values requested
-# pass in 
+# pass in
 # an array of values from the ini file
 # the wmi data array @collected_data
 # 0 if we are not to process each row - but only process row 0
@@ -2970,7 +3024,7 @@ foreach my $item (@{$list}) {
          # $1 is the NEWFIELDNAME
          # $2 is the FUNCTION
          # $3 is the FUNCTIONPARAMETERS
-         
+
          # look at query number $last_wmi_data_index and then process each row in that query
          for (my $i=0;$i<=$num_rows_in_last_wmi_result;$i++) {
             calc_new_field($1,$2,$3,$wmidata,$last_wmi_data_index,$i);
@@ -2984,7 +3038,7 @@ foreach my $item (@{$list}) {
 #-------------------------------------------------------------------------
 sub process_custom_lists {
 # run through a list of custom field parameters from an ini file and create the values requested
-# pass in 
+# pass in
 # an array of values from the ini file
 # the wmi data array @collected_data
 # array index into the wmi data
@@ -3019,7 +3073,7 @@ foreach my $item (@{$list}) {
 #-------------------------------------------------------------------------
 sub process_queryextension_fields_list {
 # enhance the query with queryextensions
-# pass in 
+# pass in
 # the query
 # array reference to the query extensions from the ini file
 my ($query,$queryextension)=@_;
@@ -3029,7 +3083,7 @@ $debug && print "Query Extensions: " . Dumper($queryextension);
 foreach my $qe (@{$queryextension}) {
    if (defined($qe)) {
       $debug && print "Processing QueryExtension: $qe\n";
-      # parse it 
+      # parse it
       # Format - NAME|SUBSTRING|ARG|REGEX|DEFAULT
       if ($qe=~/^(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)$/) {
          my $name=$1;
@@ -3037,11 +3091,11 @@ foreach my $qe (@{$queryextension}) {
          my $arg=$3;
          my $regex=$4;
          my $default=$5;
-         
+
          # set the default arg value
          my $arg_value=$default;
          my $use_default=1;
-         
+
          # look in %the_arguments to see if the argument is defined and has a value
          if (defined($the_arguments{$arg})) {
             if ($the_arguments{$arg} ne '') {
@@ -3056,7 +3110,7 @@ foreach my $qe (@{$queryextension}) {
                }
             }
          }
-         
+
          # if there is an arg value then use this extension
          $debug && print "   Using Arg Value of \"$arg_value\"\n";
          if ($arg_value eq 'NOTUSED') {
@@ -3072,7 +3126,7 @@ foreach my $qe (@{$queryextension}) {
             # now do the substitution into the query
             $new_query=~s/$name/$substring/g;
          }
-         
+
       } else {
          print "WARNING: Could not correctly parse \"queryextension\" definition in ini file: $qe (for $opt_mode)\n";
       }
@@ -3085,7 +3139,7 @@ return $new_query;
 }
 #-------------------------------------------------------------------------
 sub check_for_store_errors {
-# pass in 
+# pass in
 # the output of the eval ie $@
 my ($data_errors)=@_;
 if ($data_errors) {
@@ -3101,7 +3155,7 @@ if ($data_errors) {
 }
 #-------------------------------------------------------------------------
 sub check_for_data_errors {
-# pass in 
+# pass in
 # the output of the wmi query sub
 my ($data_errors)=@_;
 if ($data_errors) {
@@ -3114,19 +3168,19 @@ if ($data_errors) {
       $plugin_output.=" You might have your username/password wrong or the user's access level is too low. ${extra_msg}Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041010/i) {
       $plugin_output.=" The plugin is having trouble finding the required WMI Classes on the target host ($the_arguments{_host}). There can be multiple reasons for this (please go through them and check) including permissions problems (try using an admin login) or software that creates the class is not installed (eg if you are trying to checkiis but IIS is not installed). It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions or your version of Windows does not even have the required WMI class). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes the WMI service is not running, other times a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/0x8007000e/i) { 
+   } elsif ($data_errors=~/0x8007000e/i) {
       $plugin_output.=" We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of services. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/0x80041003/i) { 
+   } elsif ($data_errors=~/0x80041003/i) {
       $plugin_output.=" This is most likely a WMI permissions error. The process trying to access the WMI namespace most likely does not have the correct WMI permissions. The following link is believed to be relevant for Windows Server 2003, 2008R2 and 2012R2 - http://support.microsoft.com/kb/907460. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/0x80041004/i) { 
+   } elsif ($data_errors=~/0x80041004/i) {
       $plugin_output.=" We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of processes. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/0x80041045/i) { 
+   } elsif ($data_errors=~/0x80041045/i) {
       $plugin_output.=" We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/0x80041045/i) { 
+   } elsif ($data_errors=~/0x80041045/i) {
       $plugin_output.=" We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/0x800706ba|c00000b5/i) { 
+   } elsif ($data_errors=~/0x800706ba|c00000b5/i) {
       $plugin_output.="  This error can appear when the Windows firewall on the target machine is blocking the connection. There may be other causes. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/0x800705af/i) { 
+   } elsif ($data_errors=~/0x800705af/i) {
       # error reported by toni.garcia@sistel.es
       $plugin_output.="  This error appears to mean that the paging file is too small for this operation to complete, but if there sufficient paging space, you can reboot the $the_arguments{_host} as a workaround.\n. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_IO_TIMEOUT/i) {
@@ -3148,7 +3202,7 @@ if ($data_errors) {
 }
 #-------------------------------------------------------------------------
 sub clude_wmi_data {
-# pass in 
+# pass in
 # whether to include or exclude the specifications 1: for include, 0 for exclude
 # the array of include/exclude specifications
 # the wmi data array @collected_data
@@ -3162,17 +3216,17 @@ if ($#$specifications>=0) {
    my @new_first_wmi_query_data=(); # data from the first wmi query goes in here
    my $num_inclusions=0;
    my $num_exclusions=0;
-   
+
    $debug && print "################# Looking to perform data clusions Mode=$include_mode_text{$include_mode} ################# \n";
    $debug && print "WMI DATA BEFORE:" . Dumper($wmidata);
    foreach my $clusion_spec (@{$specifications}) {
       # old version of config::inifiles set the array to a single undefined value - we have to test for it
       if (defined($clusion_spec)) {
          $debug && print "Looking to $include_mode_text{$include_mode} data matching: $clusion_spec\n";
-   
+
          my $inclusions_for_this_spec=0;
          my $exclusions_for_this_spec=0;
-      
+
          # Now loop through the rows of data in the last WMI query
          # we only need to look at the last wmi query since this is the row that contains all the data we will user for display/test/perf data
          # we only need to delete any excluded data from the last row since everything is driven from this row and it does not matter if we leave old info behind in the other WMI queries
@@ -3201,7 +3255,7 @@ if ($#$specifications>=0) {
                      $include_this_data=1;
                   }
                }
-                     
+
                if ($include_this_data) {
                   $debug && print "******** Marking row #$row as INCLUDED\n";
                   $inclusions_for_this_spec++;
@@ -3220,13 +3274,13 @@ if ($#$specifications>=0) {
             }
             $row++;
          }
-   
+
          $num_exclusions+=$exclusions_for_this_spec;
          $num_inclusions+=$inclusions_for_this_spec;
          $debug && print "-------- There were $inclusions_for_this_spec inclusions and $exclusions_for_this_spec exclusions for this specification\n";
       }
    }
-   
+
    # now we need to go through the WMI data and pull out all the ones that ended up being excluded or not included (since we could have had multiple includes or excludes)
    $debug && print "Now checking all inclusions/exclusions for building the final list\n";
    my $row=0;
@@ -3252,7 +3306,7 @@ if ($#$specifications>=0) {
          push(@new_wmi_query_data,$wmiquerydata);
          # we also have to keep the equivalent row from the first wmi query
          push(@new_first_wmi_query_data,$$wmidata[0][$row]);
-      }      
+      }
       $row++;
    }
 
@@ -3262,10 +3316,10 @@ if ($#$specifications>=0) {
    if ($num_exclusions>0) {
       # load the new data into the data array for the new last query data
       @{$$wmidata[$last_wmi_data_index]}=@new_wmi_query_data;
-      
+
       # I can't think why I would ever have wanted to do this - the include/excludes work on the $last_wmi_data_index only
       # So why would we want to change the previous results to the same as the new results?
-      # first discovered that this was wrong with checkprintjobs      
+      # first discovered that this was wrong with checkprintjobs
       # load the new first wmi query data, if we have not already
       #if ($last_wmi_data_index>0) {
       #   @{$$wmidata[0]}=@new_first_wmi_query_data;
@@ -3276,8 +3330,8 @@ if ($#$specifications>=0) {
    }
 
    $debug && print "WMI DATA AFTER $include_mode_text{$include_mode}:" . Dumper($wmidata);
-   $debug && print "################# Data $include_mode_text{$include_mode} completed $num_inclusions row(s) included, $num_exclusions row(s) excluded ################# \n"; 
-   
+   $debug && print "################# Data $include_mode_text{$include_mode} completed $num_inclusions row(s) included, $num_exclusions row(s) excluded ################# \n";
+
 }
 
 }
@@ -3285,7 +3339,7 @@ if ($#$specifications>=0) {
 sub check_for_and_fix_row_zero {
 # after manipulating returned WMI query data we sometimes might remove Row 0 - which contains special fields
 # we have to put them back
-# pass in 
+# pass in
 # a reference to the whole last WMI query (the new version) (an array)
 # a reference to the old Row 0 from the last WMI query (the original version)
 my ($new_data_array,$old_data_hash)=@_;
@@ -3302,7 +3356,7 @@ if (!exists($$new_data_array[0]{'_ItemCount'})) {
    # so what we do is -
    # if there is a row after this one then we compare them and copy all fields from row 0 that are not in row 1 from row 0 to row 1
 
-   # if there is zero rows in the last WMI query now, then we actually only want to set 
+   # if there is zero rows in the last WMI query now, then we actually only want to set
    # _ItemCount, _ChecksOK, _KeepStateCreateTimestamp', _KeepStateSamplePeriod
 
    if ($new_num_wmi_rows>=0) {
@@ -3346,7 +3400,7 @@ sub align_data {
 # comman delimited list of fields used to align the data
 my ($wmidata,$last_wmi_data_index,$data_alignment_fields)=@_;
 
-################ FOR TESTING - we manually remove data 
+################ FOR TESTING - we manually remove data
 #splice(@{$$wmidata[0]},0,1);
 #splice(@{$$wmidata[$last_wmi_data_index]},1,1);
 
@@ -3380,7 +3434,7 @@ foreach my $wmiquerydata (@{$$wmidata[$last_wmi_data_index]}) {
       $debug && print "Located in Row $first_wmi_query_row of first query vs $row of last query\n";
       # we found the data in the first query
       if ($row==$first_wmi_query_row) {
-         # data is good 
+         # data is good
          $new_wmi_query_data[$first_wmi_query_row]=$wmiquerydata;
          $debug && print "Storing Data as is\n";
       } else {
@@ -3411,14 +3465,14 @@ if ($corrections) {
          splice(@new_wmi_query_data,$row,1);
       }
    }
-   
+
    check_for_and_fix_row_zero(\@new_wmi_query_data,\%{$$wmidata[$last_wmi_data_index][0]});
-   
+
    @{$$wmidata[$last_wmi_data_index]}=@new_wmi_query_data;
-   
+
    # since we have changed stuff we need a nodata check
    no_data_check($$wmidata[$last_wmi_data_index][0]{'_ItemCount'});
-   
+
 }
 $debug && print "Aligned Data: " . Dumper($wmidata);
 }
@@ -3441,7 +3495,7 @@ foreach my $join_config (@{$join_config_list}) {
       $debug && print "Processing JOIN for $join_config WITH $$join_query_list[$i]\n";
       # process this join
       # get the join parameters from the config
-      #       0   1     2           3           4             5           6            7             8           9         
+      #       0   1     2           3           4             5           6            7             8           9
       # join=ID,INDEX,BASEFIELD,BASEREGEX,BASEREPLACEMENT,EXTRAFIELD,EXTRAREGEX,EXTRAREPLACEMENT,NUMQUERIES,WMINAMESPACE
       my @jc=split(/,/,$join_config);
       my @join_data=(); # temp array for join data from wmi query
@@ -3456,7 +3510,7 @@ foreach my $join_config (@{$join_config_list}) {
 sub checkini {
 # run a check as defined in the ini file
 my ($wmi_ini,$ini_section)=@_;
-# pass in 
+# pass in
 # the config::inifiles object
 # the section name in the ini file we have to process
 $debug && print "Processing INI Section: $ini_section\n";
@@ -3474,9 +3528,9 @@ my $query=$wmi_ini->val($ini_section,'query','');
 if ($query) {
 
    $use_pro_library && starttimer('Preparation');
-   
+
    $ini_based_check=1;
-   
+
    # see if there are any WMI join queries
    # these come in 2 separate fields, join= and joinquery=
    my @join_config_list=$wmi_ini->val($ini_section,'join',undef);
@@ -3495,7 +3549,7 @@ if ($query) {
 
    # now we need some display fields (at least one)
    my @display_fields_list=$wmi_ini->val($ini_section,'display');
-   
+
    # and optionally get some perf data fields
    my @perfdata_fields_list=$wmi_ini->val($ini_section,'perf');
 
@@ -3512,14 +3566,14 @@ if ($query) {
       $pre_display_fields{$opt_mode}=\@pre_display_fields_list;
       $display_fields{$opt_mode}=\@display_fields_list;
       $performance_data_fields{$opt_mode}=\@perfdata_fields_list;
-      
+
       my $requires_version=$wmi_ini->val($ini_section,'requires',0);
       if ($VERSION < $requires_version) {
          # this is a problem
          print "This check ($opt_mode) requires at least version $requires_version of the plugin\nThere are probably features implemented in that version that this check uses.\n";
          finish_program($ERRORS{'UNKNOWN'});
       }
-      
+
       # if --inihelp has been specified then show the help for this mode
       if ($opt_inihelp) {
          my $inihelp=$wmi_ini->val($ini_section,'inihelp','');
@@ -3531,27 +3585,27 @@ if ($query) {
          print show_warn_crit_field_info($wmi_ini,$ini_section);
          exit;
       }
-      
+
       my $custom_header_regex=$wmi_ini->val($ini_section,'headerregex','');
       my $custom_data_regex=$wmi_ini->val($ini_section,'dataregex','');
-      
+
       # see how many samples to get
       my $number_wmi_samples=$wmi_ini->val($ini_section,'samples',$default_inifile_number_wmi_samples);
-      
+
       # see what delay to use
       # the setting in the ini file defines the default delay
-      my $ini_delay=$wmi_ini->val($ini_section,'delay',$default_inifile_delay); 
+      my $ini_delay=$wmi_ini->val($ini_section,'delay',$default_inifile_delay);
       if ($the_arguments{'_delay'} eq '') {
          $the_arguments{'_delay'}=$ini_delay;
       }
 
       # extract the calc field if any and get it ready
-      my $calc_list=$wmi_ini->val($ini_section,'calc',''); 
+      my $calc_list=$wmi_ini->val($ini_section,'calc','');
       my @calc_array=();
       if ($calc_list) {
          @calc_array=split(',',$calc_list);
       }
-      
+
       # see if --keepstate should be enabled or not
       # only disable, never enable as this is the default anyway
       if ($wmi_ini->val($ini_section,'keepstate','') eq '0') {
@@ -3559,8 +3613,8 @@ if ($query) {
          $opt_keep_state=0;
       }
 
-      # set the namespace 
-      my $ini_namespace=$wmi_ini->val($ini_section,'namespace',$opt_wminamespace); 
+      # set the namespace
+      my $ini_namespace=$wmi_ini->val($ini_section,'namespace',$opt_wminamespace);
       if ($ini_namespace) {
          # if the namespace is set in the ini file, set the command line option to that value so that it gets used by the query
          $opt_wminamespace=$ini_namespace;
@@ -3574,7 +3628,7 @@ if ($query) {
       my @collected_data;
       my ($data_errors,$last_wmi_data_index)=get_wmi_data($number_wmi_samples,$ini_namespace,$query,
          $custom_header_regex,$custom_data_regex,\@collected_data,\$the_arguments{'_delay'},\@calc_array,$wmi_ini->val($ini_section,'slashconversion',''));
-      
+
       check_for_data_errors($data_errors);
 
       # add any join data
@@ -3592,7 +3646,7 @@ if ($query) {
       if ($data_alignment_fields) {
          align_data(\@collected_data,$last_wmi_data_index,$data_alignment_fields);
       }
-      
+
       # calculate custom fields, if any defined
       my @customfield_fields_list=$wmi_ini->val($ini_section,'customfield');
       process_custom_fields_list(\@customfield_fields_list,\@collected_data,$process_each_row,$last_wmi_data_index);
@@ -3632,13 +3686,13 @@ if ($query) {
          if ($use_pro_library) {
             $show_this_one=advanced_pro_filters($collected_data[$last_wmi_data_index][$row]);
          }
-         
+
          # we may exclude some from the display
          if ($show_this_one) {
             $debug && print "THIS ROW'S DISPLAY=$this_display_info\n";
             $overall_display_info.=$this_display_info;
          }
-         
+
          # but we always include them in performance data
          $overall_performance_data.=$this_performance_data;
       }
@@ -3659,11 +3713,11 @@ if ($query) {
 
       my $overall_combined_data=combine_display_and_perfdata($overall_display_info,$overall_performance_data);
       $plugin_output.=$overall_combined_data;
-   
+
       $use_pro_library && endtimer('Post Processing');
       $use_pro_library && endtimer('Process INI Check');
       finish_program($overall_test_result);
-      
+
    } else {
       $plugin_output.="UNKNOWN - No predisplay or display field(s) specified in ini file section '$ini_section'\n";
       finish_program($ERRORS{'UNKNOWN'});
@@ -3740,7 +3794,7 @@ if ($the_arguments{'_delay'} eq '') {
 
 if ($the_arguments{'_arg1'} eq '') {
    # only need 1 WMI query when _arg1 not specified
-   $num_samples=1; 
+   $num_samples=1;
 }
 
 # default interface stats query for server 2012 and above
@@ -3782,22 +3836,22 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    $$row{'NetConnectionID'}=$$row{'NetConnectionID'} || '';
    $$row{'IPAddress'}=$$row{'IPAddress'} || '';
    $$row{'MACAddress'}=$$row{'MACAddress'} || '';
-   
+
    # also initialised the row test result variables for all rows to 0 so that when we look at the overall result, rows we have not actually included do not count for anything
    $$row{'_TestResult'}=0;
    $$row{'_StatusType'}='';
    $$row{'_Triggers'}='';
-   
+
    $debug && print "Looking for a match to the command line argument '$the_arguments{'_arg1'}' in Name:'$$row{'Name'}' or NetConnectionID:'$$row{'NetConnectionID'}' or IPAddress:'$$row{'IPAddress'}' or MACAddress:'$$row{'MACAddress'}'\n";
    # see if $the_arguments{'_arg1'} matches any of ipaddress,macaddress,netconnectionid or the original network adapter name from the Win32_PerfRawData_Tcpip_NetworkInterface query
    if (  $$row{'Name'}=~/$the_arguments{'_arg1'}/i ||
-         $$row{'NetConnectionID'}=~/$the_arguments{'_arg1'}/i || 
-         $$row{'IPAddress'}=~/$the_arguments{'_arg1'}/i || 
+         $$row{'NetConnectionID'}=~/$the_arguments{'_arg1'}/i ||
+         $$row{'IPAddress'}=~/$the_arguments{'_arg1'}/i ||
          $$row{'MACAddress'}=~/$the_arguments{'_arg1'}/i
       ) {
-   
+
       $debug && print "Matched and now looking at " . Dumper($row);
-      
+
       $$row{'_DisplayName'}=$$row{'NetConnectionID'} || $$row{'IPAddress'} || $$row{'MACAddress'} || $$row{'Name'};
       $collected_data[$last_wmi_data_index][0]{'_NumInterfaces'}++;
 
@@ -3807,16 +3861,16 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
       calc_new_field('_PacketsReceivedPersec','PERF_COUNTER_COUNTER','PacketsReceivedPersec,%.0f',\@collected_data,$last_wmi_data_index,$i);
       calc_new_field('_PacketsSentPersec','PERF_COUNTER_COUNTER','PacketsSentPersec,%.0f',\@collected_data,$last_wmi_data_index,$i);
 
-      # calculate the interface bandwidth in bytes (it is bits from the WMI query), divide the bits by 8 
+      # calculate the interface bandwidth in bytes (it is bits from the WMI query), divide the bits by 8
       calc_new_field('_CurrentBandwidthBytes','basicmaths',"CurrentBandwidth,/,8,%.2f",\@collected_data,$last_wmi_data_index,$i);
-      
+
       # calculate the interface utilisation using the new interface bandwidth in bytes
       calc_new_field('_ReceiveBytesUtilisation','percent','_BytesReceivedPersec,_CurrentBandwidthBytes,%.2f',\@collected_data,$last_wmi_data_index,$i);
       calc_new_field('_SendBytesUtilisation','percent','_BytesSentPersec,_CurrentBandwidthBytes,%.2f',\@collected_data,$last_wmi_data_index,$i);
 
    # the parameters for this "function" are
    # SOURCEFIELD1,SOURCEFIELD2,SPRINTF_SPEC
-   # where 
+   # where
    # SOURCEFIELD1 [0] is a WMI field name which contains some number
    # SOURCEFIELD2 [1] is a WMI field name which contains some number
    # SPRINTF_SPEC [2] - a format specification passed directly to sprintf to format the result (can leave blank)
@@ -3825,16 +3879,16 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    #
 
 
-      
+
       # store the test result so we can access it for an overall test result
       $$row{'_TestResult'}=test_limits($opt_warn,$opt_critical,$row,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
-      
+
       my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($row,$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-      
+
       # concatenate the per drive results together
       $results_text.="$this_display_info    ";
       $performance_data.=$this_performance_data;
-   
+
    }
 
    $i++;
@@ -3843,18 +3897,18 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
 if ($collected_data[$last_wmi_data_index][0]{'_NumInterfaces'}>0) {
    my $overall_test_result=work_out_overall_exit_code(\@collected_data,1,$last_wmi_data_index);
    my ($overall_display_info,$overall_performance_data,$overall_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$pre_display_fields{$opt_mode},undef,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-   
+
    $overall_combined_data=combine_display_and_perfdata("$overall_display_info$results_text",$performance_data);
-   
+
    # there might be some (Sample Period xx sec) contained in the $overall_display_info (left over from when we displayed each row individually)
    # if there is remove it since we are going to display it as an overall now, only leave the first one in place
    # we have to remove it after the fact since we add it to each row before adding the overall status
    # and we only sometimes do the overall status
    # only row 0 or the query might have it so that means there is only ever going to be 2 and we have to remove the 2nd one
    $overall_combined_data=~s/(.*?Sample Period.*?) \(Sample Period \d+ sec\)(.*)/$1$2/; # now remove any other ones
-   
+
    $plugin_output.=$overall_combined_data;
-   
+
    finish_program($overall_test_result);
 } else {
    $plugin_output.="No Network Interfaces specified. Valid Interface Names are:\n" . list_collected_values_from_all_rows(\@collected_data,['Name','NetConnectionID','IPAddress','MACAddress'],"\n",', ',0) . "\nSpecify the -a parameter with an adapter name. Use ' ' around the adapter name.\n";
@@ -4028,7 +4082,7 @@ if ($return_values || $the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i 
    # expect output like
    #CLASS: Win32_OperatingSystem
    #FreePhysicalMemory|Name|TotalVisibleMemorySize
-   #515204|Microsoft Windows XP Professional|C:\WINDOWS|\Device\Harddisk0\Partition1|1228272   
+   #515204|Microsoft Windows XP Professional|C:\WINDOWS|\Device\Harddisk0\Partition1|1228272
    # this means that we need to specify a regular expression to retrieve the data since there are more fields in the data than column headings
    # we only want data fields 1 4 5 so that we match the column headings
    ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
@@ -4046,7 +4100,7 @@ if ($return_values || $the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i 
    $opt_mode='checkpage';
    &checkpage();
    finish_program($ERRORS{'UNKNOWN'}); # should never get here
-   
+
    # This is the old check ............
    #   $collected_data[0][0]{'MemType'}='Page File';
    #   # expect output like
@@ -4085,11 +4139,11 @@ if ($return_values) {
 }
 
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
-   
+
 my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 $plugin_output.=$this_combined_data;
 finish_program($test_result);
-  
+
 }
 #-------------------------------------------------------------------------
 sub checkpage {
@@ -4140,7 +4194,7 @@ if ($the_arguments{'_arg4'}) {
    # @ram_data will END up looking like @collected_data ie the ram results will be in index [0][0] of the array which will contain a hash
    $debug && print "Collecting RAM Data\n";
    @ram_data=checkmem(1);
-   # for RAM we are interested in 
+   # for RAM we are interested in
    # [0][0]{'_MemUsed'}
    # [0][0]{'_MemFree'}
    # [0][0]{'_MemTotal'}
@@ -4148,7 +4202,7 @@ if ($the_arguments{'_arg4'}) {
    # modify the display - do not use peak fields anymore plus change some text
    $pre_display_fields{'checkpage'}=undef;
    $display_fields{'checkpage'}=[ '_DisplayMsg||~|~| - ||', 'Name||~|~| ||', '_Total|#B|Total|: | - ||', '_Used|#B|Used|: | ||', '_Used%|%|~|~| - |(|)', '_Free|#B|Free|: | ||', '_Free%|%|~|~||(|)' ];
-   $performance_data_fields{'checkpage'}=[ '_Total|Bytes|{Name} Page+RAM Size', '_Used|Bytes|{Name} Used', '_Used%|%|{Name} Utilisation', ], 
+   $performance_data_fields{'checkpage'}=[ '_Total|Bytes|{Name} Page+RAM Size', '_Used|Bytes|{Name} Used', '_Used%|%|{Name} Utilisation', ],
 }
 
 if ($the_arguments{'_arg3'}) {
@@ -4194,25 +4248,25 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
 
          # firstly there is the total page size - AllocatedBaseSize, it is in MB
          $$row{'AllocatedBaseSize'}+=$$row{'_MemTotalMB'};
-         # then there is the current usage 
+         # then there is the current usage
          $$row{'CurrentUsage'}+=$$row{'_MemUsedMB'};
          # and then there is the free amount
          $debug && print "Page Data After - Used:$$row{'CurrentUsage'}, Total:$$row{'AllocatedBaseSize'}\n";
-         
+
       }
 
       # at this point we can assume that we have all the data we need stored in @collected_data
       $$row{'_FreeMB'}=$$row{'AllocatedBaseSize'}-$$row{'CurrentUsage'};
       $$row{'_PeakFreeMB'}=$$row{'AllocatedBaseSize'}-$$row{'PeakUsage'};
-      
+
       if ($$row{'_FreeMB'}<0) {
          $$row{'_FreeMB'}=0
       }
-      
+
       if ($$row{'_PeakFreeMB'}<0) {
          $$row{'_PeakFreeMB'}=0
       }
-      
+
       $$row{'_Used%'}=sprintf("%.0f",$$row{'CurrentUsage'}/$$row{'AllocatedBaseSize'}*100);
       $$row{'_PeakUsed%'}=sprintf("%.0f",$$row{'PeakUsage'}/$$row{'AllocatedBaseSize'}*100);
       $$row{'_Free%'}=sprintf("%.0f",$$row{'_FreeMB'}/$$row{'AllocatedBaseSize'}*100);
@@ -4222,7 +4276,7 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
       $$row{'_Free'}=$$row{'_FreeMB'}*$actual_bytefactor*$actual_bytefactor;
       $$row{'_PeakFree'}=$$row{'_PeakFreeMB'}*$actual_bytefactor*$actual_bytefactor;
       $$row{'_Total'}=$$row{'AllocatedBaseSize'}*$actual_bytefactor*$actual_bytefactor;
-      
+
       if ($the_arguments{'_arg1'}=~/auto/) {
          # automatically set warning and critical levels
          # to do this we need to retrieve the users settings for page file size, initial size and maximum size
@@ -4239,16 +4293,16 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
             $debug && print "WMI Join Query must not have returned InitialSize and/or MaximumSize data\n";
          }
       }
-      
+
       my $test_result=test_limits($opt_warn,$opt_critical,$row,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
-   
+
       # check for Critical/Warning
       if ($test_result==$ERRORS{'CRITICAL'}) {
          $num_critical++;
       } elsif ($test_result==$ERRORS{'WARNING'}) {
          $num_warning++;
       }
-         
+
       my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($row,$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
       # concatenate the per drive results together
       $results_text.="$this_display_info     ";
@@ -4264,7 +4318,7 @@ if ($results_text) {
 
    my $exit_type=$ERRORS{'OK'};
    $collected_data[$last_wmi_data_index][0]{'_OverallResult'}='OK';
-   
+
    if ($num_critical>0) {
       $exit_type=$ERRORS{'CRITICAL'};
       $collected_data[$last_wmi_data_index][0]{'_OverallResult'}='CRITICAL';
@@ -4287,7 +4341,7 @@ if ($results_text) {
 #-------------------------------------------------------------------------
 sub checkfileage {
 # initial idea from steav on github.com
-# its a good idea and we modified to for our use using our programming techniques and 
+# its a good idea and we modified to for our use using our programming techniques and
 # ensuring that the warning/critical criteria were consistently used
 # this is where we also first introduced the time multipliers
 
@@ -4295,12 +4349,12 @@ my $perf_data_unit='hr'; # default unit is hours
 # if the user specifies it but it is not valid we silently fail
 if (defined($time_multipliers{$the_arguments{'_arg2'}})) {
    # looks like the user has specified a valid time multiplier for use in the performance data
-   $perf_data_unit=$the_arguments{'_arg2'};  
+   $perf_data_unit=$the_arguments{'_arg2'};
 }
 my $perf_data_divisor=$time_multipliers{$perf_data_unit};
 
 # we can not support full performance data with warn/crit since we want to divide it by whatever units the user specifies
-$opt_z=''; 
+$opt_z='';
 
 my @collected_data;
 
@@ -4314,16 +4368,16 @@ check_for_data_errors($data_errors);
 if ($collected_data[$last_wmi_data_index][0]{'Name'}) {
    my $lastmodified=$collected_data[$last_wmi_data_index][0]{'LastModified'};
    my ($lastmod_sec,$fileage)=convert_WMI_timestamp_to_seconds($lastmodified);
-   
+
    if ($lastmod_sec ne '') {
       $collected_data[$last_wmi_data_index][0]{'_FileAge'}=$fileage;
-      
+
       my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
 
       $collected_data[$last_wmi_data_index][0]{'_DisplayFileAge'}=sprintf("%.2f",$fileage/$perf_data_divisor);
       $collected_data[$last_wmi_data_index][0]{'_NicelyFormattedFileAge'}=display_uptime($fileage);
       $collected_data[$last_wmi_data_index][0]{'_PerfDataUnit'}=$perf_data_unit;
-      
+
       # apply the /$perf_data_divisor throughout the performance data
       # have to take special care if no warn/crit specified
       # also, we want to apply these new warning/critical specs against the "_DisplayFileAge" field
@@ -4335,10 +4389,10 @@ if ($collected_data[$last_wmi_data_index][0]{'Name'}) {
       if ($critical_perf_specs_parsed{'_FileAge'} ne '') {
          $critical_perf_specs_parsed{'_DisplayFileAge'}=$critical_perf_specs_parsed{'_FileAge'}/$perf_data_divisor;
       }
-      
+
       my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($collected_data[$last_wmi_data_index][0],$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
       $plugin_output.=$this_combined_data;
-      
+
       finish_program($test_result);
    } else {
       $plugin_output.="UNKNOWN - Could not correct recognise the returned time format $lastmodified";
@@ -4348,7 +4402,7 @@ if ($collected_data[$last_wmi_data_index][0]{'Name'}) {
    $plugin_output.="UNKNOWN - Could not find the file $the_arguments{'_arg1'}";
    finish_program($ERRORS{'UNKNOWN'});
 }
-   
+
 }
 #-------------------------------------------------------------------------
 sub checkfilesize {
@@ -4481,9 +4535,9 @@ sub checkprocess {
 
 # setup the field we will use to search using the regex
 my $query_field='Name';
-if ($opt_submode=~/c/i) {
+if ($opt_submode=~/^c/i) {
    $query_field='CommandLine';
-} elsif ($opt_submode=~/e/i) {
+} elsif ($opt_submode=~/^e/i) {
    $query_field='ExecutablePath';
 }
 
@@ -4506,7 +4560,6 @@ $process_include_regex=~s#\/#\\\\#g;
 my $process_exclude_regex=$the_arguments{'_arg3'};
 # use # as the reg ex delimiter since the user might specify /
 $process_exclude_regex=~s#\/#\\\\#g;
-
 
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
@@ -4637,7 +4690,7 @@ my ($this_display_info,$this_performance_data,$this_combined_data)=create_displa
 $plugin_output.=$this_combined_data;
 
 finish_program($test_result);
-  
+
 }
 #-------------------------------------------------------------------------
 sub checkservice {
@@ -4646,7 +4699,7 @@ my $where_bit='';
 my $auto_mode='';
 if (lc($the_arguments{'_arg1'}) eq 'auto') {
    # for this query we need to look for all automatic services
-   # check that all auto services are 
+   # check that all auto services are
    # STARTED=True, STATE=Running and STATUS=OK
    # we do a query that actually always should return data so that we know that the query works
    # we could do a select just listing the bad ones, but it returns nothing if good. hard to tell if it really worked ok.
@@ -4693,8 +4746,8 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    # which means DisplayName and Name might not be set so we need to test for this to stop
    # "Use of uninitialized value in pattern match" errors
    if ($$row{'DisplayName'} && $$row{'Name'}) {
-      if (  $auto_mode || 
-            ( !$auto_mode && ($$row{'DisplayName'}=~/$the_arguments{'_arg1'}/i || $$row{'Name'}=~/$the_arguments{'_arg1'}/i) ) 
+      if (  $auto_mode ||
+            ( !$auto_mode && ($$row{'DisplayName'}=~/$the_arguments{'_arg1'}/i || $$row{'Name'}=~/$the_arguments{'_arg1'}/i) )
          ) {
 
          my $process_this_row=1;
@@ -4722,7 +4775,7 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
                $process_this_row=0;
             }
          }
-         
+
          if ($process_this_row) {
             $debug && print "Including the following service: " . Dumper($row) . "\n";
             my $status_display_info='';
@@ -4780,7 +4833,7 @@ $use_pro_library && checkshare_pro();
 }
 #-------------------------------------------------------------------------
 sub checksmart {
-   
+
 # 4 arrays for 4 wmi queries
 my @collected_data;
 my @smart_data;
@@ -4864,7 +4917,7 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    } else {
       $$row{'_PhysicalDeviceID'}='';
    }
-   
+
    if ($$row{'SerialNumber'}=~/null/i) {
       # could not get the serial so just use the physical id
       $$row{'_DiskDisplayName'}="Disk#$$row{'_PhysicalDeviceID'}";
@@ -4892,12 +4945,12 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
 #      }
       #################### FOR TESTING FAILURE ###################
    }
-   
+
    # add in the smart attribue data
    # parse the vendorspecific code if there is any data
    if (exists($$row{'VendorSpecific'})) {
       while ($$row{'VendorSpecific'}=~/(\d*),(\d*),(\d*),(\d*),(\d*),(\d*),(\d*),(\d*),(\d*),(\d*),(\d*),(\d*),/sg) {
-         # see if this attribute codeis in our hash 
+         # see if this attribute codeis in our hash
          if (exists($smartattributes{$3})) {
             # add it to this row after calculating it
             $$row{$smartattributes{$3}}=$8+256*$9;
@@ -4907,9 +4960,9 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    }
 
    my $test_result=test_limits($opt_warn,$opt_critical,$row,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
-   
+
    my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($row,$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
-   
+
    # concatenate the per drive results together
    $results_text.="$this_display_info\n";
    $performance_data.=$this_performance_data;
@@ -5034,13 +5087,13 @@ if (!defined($the_arguments{'_arg4'})) {
 
 # work out the display modes
 # ARG4 is a 2 character string formatted like XY
-# where 
+# where
 # X=0, display not ok drives first
 # X=1, display drives in the order of the WMI query results
 # X=2, only display not ok drives
 # X=3, normal display (like X=1) when all ok, but if some not ok, then only show not
 # Y=0, show results on a single line
-# Y=1, show results as multi-line with the first line being a high level summary of status 
+# Y=1, show results as multi-line with the first line being a high level summary of status
 my $display_mode_x=substr($the_arguments{'_arg4'},0,1) || '0';
 my $display_mode_y=substr($the_arguments{'_arg4'},1,1) || '0';
 
@@ -5058,9 +5111,12 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    $debug && print "ROW BEFORE: " . Dumper($row);
    $$row{'VolumeName'}=$$row{'VolumeName'} || '';
    # if $the_arguments{'_arg1'} is left out it will be blank and will match all drives
+   $debug && print "Checking if '$$row{'DeviceID'}'=~/$the_arguments{'_arg1'}/i || '$$row{'VolumeName'}'=~/$the_arguments{'_arg1'}/i || ('$$row{'DeviceID'}' eq '$alldisk_identifier' && '$the_arguments{'_arg3'}'\n";
    if ($$row{'DeviceID'}=~/$the_arguments{'_arg1'}/i || $$row{'VolumeName'}=~/$the_arguments{'_arg1'}/i || ($$row{'DeviceID'} eq $alldisk_identifier && $the_arguments{'_arg3'}) ) {
       # include this drive in the results
-      if ($$row{'Size'} ne '') {
+      if ($$row{'Size'} eq '' && $the_arguments{'_ignorezerosizedrives'}) {
+         $debug && print "Drive '$$row{'DeviceID'}', '$$row{'VolumeName'}', '$$row{'DeviceID'}' has a size of '', so ignoring it\n";
+      } else {
          # got valid data
          # add our calculated data to the hash
          $$row{'_DriveSizeGB'}=sprintf("%.2f", $$row{'Size'}/$actual_bytefactor/$actual_bytefactor/$actual_bytefactor);
@@ -5077,9 +5133,9 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
             $$row{'_Free%'}=0;
          }
          $$row{'_FreeGB'}=sprintf("%.2f", $$row{'FreeSpace'}/$actual_bytefactor/$actual_bytefactor/$actual_bytefactor);
-         
+
          my $test_result=test_limits($opt_warn,$opt_critical,$row,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
-         
+
          # check for Critical/Warning
          if ($test_result==$ERRORS{'CRITICAL'}) {
             $num_critical++;
@@ -5099,7 +5155,7 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
          }
          # stick the drive identifier into the values so it can be accessed
          $$row{'DiskDisplayName'}=$drive_identifier;
-         
+
          my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($row,$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 
          # setup various variables with the display results
@@ -5112,18 +5168,15 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
             # this drive is not OK, show show it now
             $items_with_not_ok_status.="$this_display_info$inter_item_line_feed";
          }
-         
+
          # alway set up the normal order results
          $results_text.="$this_display_info$inter_item_line_feed";
 
          # concatenate the per drive performance results together always in normal order
          $performance_data.=$this_performance_data;
-
-      } else {
-         # this drive does not get included in the results size there is a problem with its data
       }
    }
-   $debug && print "ROW AFTER: " . Dumper($row);   
+   $debug && print "ROW AFTER: " . Dumper($row);
 }
 
 # decide which drives to show
@@ -5228,12 +5281,12 @@ if (!defined($the_arguments{'_arg4'})) {
 
 # work out the display modes
 # ARG4 is a 2 character string formatted like XY
-# where 
+# where
 # X=0, display not ok drives first
 # X=1, display drives in the order of the WMI query results
 # X=2, only display not ok drives
 # Y=0, show results on a single line
-# Y=1, show results as multi-line with the first line being a high level summary of status 
+# Y=1, show results as multi-line with the first line being a high level summary of status
 my $display_mode_x=substr($the_arguments{'_arg4'},0,1) || '0';
 my $display_mode_y=substr($the_arguments{'_arg4'},1,1) || '0';
 
@@ -5249,11 +5302,15 @@ my $items_with_not_ok_status='';
 my $items_with_ok_status_summary='';
 foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
    # make sure $$row{'Label'} is initialised (it won't be unless the drive has been named)
+   $debug && print "ROW BEFORE: " . Dumper($row);
    $$row{'Label'}=$$row{'Label'} || '';
    # if $the_arguments{'_arg1'} is left out it will be blank and will match all drives
+   $debug && print "Checking if '$$row{'DeviceID'}'=~/$the_arguments{'_arg1'}/i || '$$row{'Label'}'=~/$the_arguments{'_arg1'}/i || '$$row{'Name'}'=~/$the_arguments{'_arg1'}/i || ('$$row{'DeviceID'}' eq '$alldisk_identifier' && '$the_arguments{'_arg3'}')\n";
    if ($$row{'DeviceID'}=~/$the_arguments{'_arg1'}/i || $$row{'Label'}=~/$the_arguments{'_arg1'}/i || $$row{'Name'}=~/$the_arguments{'_arg1'}/i || ($$row{'DeviceID'} eq $alldisk_identifier && $the_arguments{'_arg3'}) ) {
       # include this drive in the results
-      if ($$row{'Capacity'}>0) {
+      if ($$row{'Capacity'}>0 && $the_arguments{'_ignorezerosizedrives'}) {
+         $debug && print "Volume $$row{'DeviceID'}, $$row{'Label'}, $$row{'Name'} was included but has capacity of zero, so ignoring it\n";
+      } else {
          # got valid data
          # add our calculated data to the hash
          $$row{'_DriveSizeGB'}=sprintf("%.2f", $$row{'Capacity'}/$actual_bytefactor/$actual_bytefactor/$actual_bytefactor);
@@ -5262,9 +5319,9 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
          $$row{'_UsedGB'}=sprintf("%.2f", $$row{'_UsedSpace'}/$actual_bytefactor/$actual_bytefactor/$actual_bytefactor);
          $$row{'_Free%'}=sprintf("%.1f",$$row{'FreeSpace'}/$$row{'Capacity'}*100);
          $$row{'_FreeGB'}=sprintf("%.2f", $$row{'FreeSpace'}/$actual_bytefactor/$actual_bytefactor/$actual_bytefactor);
-         
+
          my $test_result=test_limits($opt_warn,$opt_critical,$row,\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
-         
+
          # check for Critical/Warning
          if ($test_result==$ERRORS{'CRITICAL'}) {
             $num_critical++;
@@ -5285,7 +5342,7 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
          }
          # stick the drive identifier into the values so it can be accessed
          $$row{'VolumeDisplayName'}=$drive_identifier;
-         
+
          my ($this_display_info,$this_performance_data,$this_combined_data)=create_display_and_performance_data($row,$display_fields{$opt_mode},$performance_data_fields{$opt_mode},\%warn_perf_specs_parsed,\%critical_perf_specs_parsed);
 
          # setup various variables with the display results
@@ -5298,17 +5355,16 @@ foreach my $row (@{$collected_data[$last_wmi_data_index]}) {
             # this drive is not OK, show show it now
             $items_with_not_ok_status.="$this_display_info$inter_item_line_feed";
          }
-         
+
          # alway set up the normal order results
          $results_text.="$this_display_info$inter_item_line_feed";
 
          # concatenate the per drive performance results together always in normal order
          $performance_data.=$this_performance_data;
 
-      } else {
-         # this drive does not get included in the results size there is a problem with its data
       }
    }
+   $debug && print "ROW AFTER: " . Dumper($row);
 }
 
 # decide which drives to show
@@ -5368,7 +5424,7 @@ my %severity_level_descriptions=(
    3  => "Information",
    4  => "Security Audit Success",
    5  => "Security Audit Failure",
-);   
+);
 
 my $wmi_ini;
 
@@ -5396,7 +5452,7 @@ if (!$the_arguments{'_arg1'}) {
 }
 
 # arg1 can be a comma delimited list of logfile names eg system,application or just system
-# it can also include % in the logfile name 
+# it can also include % in the logfile name
 # build up the WMI query to include one or more logfile specifications
 my @logfile_list=split(/,/,$the_arguments{'_arg1'});
 my $logfile_wherebit='';
@@ -5418,7 +5474,7 @@ my $severity_level=$the_arguments{'_arg2'}; # doing this ensures we do not chang
 if ($use_pro_library) {
    # performance hit opening ini files if not using Pro version
    $wmi_ini=load_event_static_variables($the_arguments{'_arg4'},$wmi_ini);
-   $use_pro_library && substitute_static_variables(0,\$severity_level,'');
+   $use_pro_library && substitute_static_variables(0,\$severity_level,'','severity level');
 }
 
 # arg2 can be just a single number or a comma delimited list of numbers
@@ -5448,7 +5504,7 @@ if ($#severity_levels==-1) {
    }
    # remove the last " or" from the wherebit
    $severity_wherebit=~s/ or$//;
-   
+
    # put brackets around the where part since it uses "OR"
    $severity_wherebit="($severity_wherebit)";
 }
@@ -5501,7 +5557,7 @@ sub wmi_data_join {
 # join WMI data
 # WMIC seems not to be able to do this although it looks like WQL is actually capable of it
 # anyway we do it here
-# its a bit ugly since it means multiple wmi queries 
+# its a bit ugly since it means multiple wmi queries
 # we pass in an existing array, do a WMIC query and then take the array from that as the extra array
 # we then join the extra array to the base array
 
@@ -5546,9 +5602,9 @@ for (my $query_number=$last_wmi_data_index;$query_number<=$last_wmi_data_index;$
    # this will let us look up values quickly by the values contained in $extra_field
    my %extra_index=();
    $debug && print "Will be looking for Extra Results in " . Dumper($$results[$query_number]);
-   
+
    # --------------- For now we only look in the $join_last_wmi_data_index query index for the extra results since we are only processing one row
-   
+
    for (my $row_num=0;$row_num<=$#{$$results[$join_last_wmi_data_index]};$row_num++) {
       my $extra_value=lc($$results[$join_last_wmi_data_index][$row_num]{$extra_field} || '');
       # apply the regex to the extra field, if any
@@ -5570,15 +5626,15 @@ for (my $query_number=$last_wmi_data_index;$query_number<=$last_wmi_data_index;$
       $extra_index{$extra_value}=$row_num;
    }
    $debug && print "Extra Lookup Index for Query Number $query_number: " . Dumper(\%extra_index);
-   
+
    # now loop around each row of WMI data
    for (my $row_num=0;$row_num<=$#{$$base_array[$query_number]};$row_num++) {
       $debug && print "Processing Base Row #$row_num: " . Dumper($$base_array[$query_number][$row_num]) . "\n";
-      # this base array has a field $base_field with a value 
+      # this base array has a field $base_field with a value
       # we have to find the same value in the $results looking in the $extra_field
       # we use our lookup hash to do this easily
       # see if you can find the value from $base_field in $base_array in the lookup index
-      
+
       my $base_value=lc($$base_array[$query_number][$row_num]{$base_field} || '');
       # apply the regex to the base field, if any
       if ($base_regex) {
@@ -5626,8 +5682,8 @@ return $data_errors,$join_last_wmi_data_index;
 }
 #-------------------------------------------------------------------------
 sub load_event_static_variables {
-# pass in 
-# comma delimited list of section names to read inclusions and exclusions from 
+# pass in
+# comma delimited list of section names to read inclusions and exclusions from
 # reference to the wmi_ini object
 my ($sections,$wmi_ini)=@_;
 
@@ -5652,12 +5708,12 @@ return $wmi_ini;
 sub process_event_clusions {
 # process event log check inclusions and exclusions from the ini file
 # return a new collected data array
-# pass in 
+# pass in
 # event inclusion mode
-# comma delimited list of section names to read inclusions and exclusions from 
+# comma delimited list of section names to read inclusions and exclusions from
 # reference to the collected data array - only a single query is passed in eg $collected_data[0]
 # reference to the wmi_ini object
-# 
+#
 # we return a new array
 my ($event_mode,$sections,$wmidata,$wmi_ini)=@_;
 my $type=reftype $wmi_ini || '';
@@ -5694,14 +5750,14 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
    }
 
    $debug && print "Event Mode=$event_mode\nIn/Exclusion List=" . Dumper(\@im_list,\@is_list,\@ii_list,\@ic_list,\@em_list,\@es_list,\@ei_list,\@ec_list);
-   
+
    # step through each record found
    foreach my $row (@{$wmidata}) {
       $debug && print "WMI Data Row:" . Dumper($row);
       # process all the inclusions first
       my $include_record=0;
       $use_pro_library && prepare_event_counts();
-      
+
       # see if there are any inclusions defined, if not the record is included
       if ($#im_list>=0 || $#is_list>=0 || $#ii_list>=0 || $#ic_list>=0) {
          foreach my $is (@is_list) {
@@ -5719,7 +5775,7 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
                }
             }
          }
-         
+
          # look for inclusions based on Message, but only if it is not included already
          if (!$include_record) {
             # now check for includes against Message
@@ -5777,7 +5833,7 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
                }
             }
          }
-         
+
          if ($use_pro_library) {
             $include_record=calculate_event_inclusion($event_mode,$include_record);
          }
@@ -5787,7 +5843,7 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
          $debug && print "No include lists so automatically including\n";
          $include_record=1;
       }
-      
+
       # now check for exclusions, if any and only if this record is included
       if ( $include_record &&    ($#em_list>=0 || $#es_list>=0 || $#ei_list>=0 || $#ec_list>=0)   ) {
          foreach my $es (@es_list) {
@@ -5849,7 +5905,7 @@ if ($#section_lists>=0 && $$wmidata[0]{'_ItemCount'}>0) {
       } else {
          # nothing to do - no exclusions defined or record not included anyway
       }
-      
+
       $debug && print "IN/EX=$include_record\n\n";
       if ($include_record) {
          # add this record to the new data
@@ -5879,7 +5935,7 @@ if ($multiplier) {
    $debug && print "Value of $value ";
    if (defined($time_multipliers{$multiplier})) {
       # this is a time based multiplier
-      # return the value in seconds 
+      # return the value in seconds
       $value=$value * $time_multipliers{lc($multiplier)};
       $debug && print "multiplied up to $value using $multiplier * " . $time_multipliers{lc($multiplier)} . "\n";
    } else {
@@ -5899,7 +5955,7 @@ sub test_single_boundary {
 # boundary value
 # boundary multiplier character eg k, m, g etc
 # the test value
-# 
+#
 # return 1 if boundary exceeded or zero if not
 # also return the actual mulitplied up $boundary_value
 my ($less_than_boundary,$boundary_equal,$original_boundary_value,$boundary_multiplier,$test_value)=@_;
@@ -5911,7 +5967,7 @@ my $boundary_value=apply_multiplier($original_boundary_value,$boundary_multiplie
 # these boundary tests have to use > >= etc and no gt ge etc since we want a real number test
 # sometimes we get non numbers coming in here so we have to test for that
 if(looks_like_number($test_value)) {
-   
+
    if ($less_than_boundary && $boundary_equal) {
       # TEST <=
       $debug && print "TEST1 $test_value <= $boundary_value\n";
@@ -5931,7 +5987,7 @@ if(looks_like_number($test_value)) {
          $test_result=1;
       }
    } else {
-      # TEST > 
+      # TEST >
       $debug && print "TEST4 $test_value > $boundary_value\n";
       if ($test_value > $boundary_value) {
          $test_result=1;
@@ -5939,7 +5995,7 @@ if(looks_like_number($test_value)) {
    }
    $debug && print "Test of $less_than_boundary$boundary_equal$original_boundary_value$boundary_multiplier ($boundary_value) vs $test_value yields $test_result\n";
 } else {
-   $debug && print "Boundary Test not performed since Test Value '$test_value' is not numeric\n"; 
+   $debug && print "Boundary Test not performed since Test Value '$test_value' is not numeric\n";
 }
 return $test_result,$boundary_value;
 }
@@ -5993,7 +6049,7 @@ if ($spec ne '') {
          $max_multiplier=$6;
          $format_type=1;
          $debug && print "SPEC=$field_name,$2,$3,$4,$5,$6\n";
-   
+
       # this second spec might look like this
       # FIELD=@1M <--- we are specifically looking for a single value
       } elsif ($spec=~/(.*?)=*(\@*)([0-9+\-\.\~]+)($multiplier_regex*)/i) {
@@ -6008,7 +6064,7 @@ if ($spec ne '') {
       } else {
          $debug && print "SPEC format for $spec, not recognised\n";
       }
-   
+
       # check to see if we got a valid specification
       if ($format_type) {
          $debug && print "Range Spec - FIELD=$field_name, AT=$at_specified MIN=$min MINMULTIPLIER=$min_multiplier MAX=$max MAXMULTIPLIER=$max_multiplier\n";
@@ -6017,10 +6073,10 @@ if ($spec ne '') {
          my $upper_bound_value='';
          my $lower_bound_check='';
          my $upper_bound_check='';
-   
+
          # there is a possibility that the boundary is specified as ~
          # this means negative infinity
-   
+
          # we have a range comparison and we check both bounds using < and >
          if ($min eq '~') {
             # since min is negative infinity then no point in doing this lower bound test as it will be always false
@@ -6031,7 +6087,7 @@ if ($spec ne '') {
             $debug && print "Testing MIN: '$min' for Field $field_name which has value: $$test_value{$field_name}\n";
             ($lower_bound_check,$lower_bound_value)=test_single_boundary('<','',$min,$min_multiplier,$$test_value{$field_name});
          }
-         
+
          if ($max eq '') {
             # since max is inifinity no point in checking since result will always be false
             $upper_bound_check=0;
@@ -6041,7 +6097,7 @@ if ($spec ne '') {
             $debug && print "Testing MAX: '$max' for Field $field_name which has value: $$test_value{$field_name}\n";
             ($upper_bound_check,$upper_bound_value)=test_single_boundary('','',$max,$max_multiplier,$$test_value{$field_name});
          }
-   
+
          # generate alert if either lower or upper triggered
          if ($lower_bound_check) {
             $test_result=1;
@@ -6051,7 +6107,7 @@ if ($spec ne '') {
             $test_result=1;
             $trigger_display="$field_name>$max$max_multiplier";
          }
-   
+
          if ($at_specified) {
             # this just reverses the results
             if ($test_result==1) {
@@ -6063,10 +6119,10 @@ if ($spec ne '') {
             }
             $debug && print "@ specified so reverse the result\n";
          }
-   
+
          # rewrite the specification taking into account any multipliers
          # this is done so that we can parse consistent and recognisable values in the performance data
-         # performance data does not recognise our multiplier system so we have to pre-multiply it 
+         # performance data does not recognise our multiplier system so we have to pre-multiply it
          if ($format_type==1) {
             if ($opt_z) {
                #  provide full spec performance warn/crit data
@@ -6084,7 +6140,7 @@ if ($spec ne '') {
                }
             }
          } else {
-            # for this format type the min was forced to zero, but it was not actually specified - so we only show an upper bound 
+            # for this format type the min was forced to zero, but it was not actually specified - so we only show an upper bound
             if ($opt_z) {
                #  provide full spec performance warn/crit data
                $perf_data_spec="$at_specified$upper_bound_value";
@@ -6093,7 +6149,7 @@ if ($spec ne '') {
                $perf_data_spec="$upper_bound_value";
             }
          }
-   
+
       } else {
          # seems to be some invalid spec format
          $test_result=100;
@@ -6157,14 +6213,15 @@ foreach my $result (@{$values_array}) {
          if (exists($$row{$field})) { # it might not exist for example if you found no processes in your search
             # remove any CR or LF from the field as they stuff up the list - replace them with space
             $$row{$field}=~s/\n|\r/ /g;
-            
+
             # perform reverse static variable substitutions on the fields
-            $use_pro_library && substitute_static_variables(1,\$$row{$field},$field);
-            
+            # no longer needed as substitutions now occur at source ie wmi data collection
+            # $use_pro_library && substitute_static_variables(1,\$$row{$field},$field,'collected field data');
+
             push(@row_field_list,$$row{$field});
          }
       }
-      
+
       my $row_string=join($field_delimiter,@row_field_list);
       # remove empty fields from the end - remove anything ending in the field delimiter
       # use \Q and \E to quote the field delimiter since it can have regex special chars which screw up the regex
@@ -6179,7 +6236,7 @@ foreach my $result (@{$values_array}) {
          }
       } else {
          # add to the list, preserving order
-         push(@list,$row_string); 
+         push(@list,$row_string);
       }
    }
 }
@@ -6262,9 +6319,9 @@ my ($warn_spec_list,$critical_spec_list,$test_value,$warn_perf_specs_parsed,$cri
 # most of this stuff we pass in just gets passed off to test_multiple_limits
 # we call test_multiple_limits twice, once for warnings and once for criticals
 
-# translate any static variables
-$use_pro_library && substitute_static_variables(0,$warn_spec_list,'');
-$use_pro_library && substitute_static_variables(0,$critical_spec_list,'');
+# translate any static variables in the command line specifications only if the _forcevariablescriteriaspec command line argument is specified since this can cause other problems with unexpected substitutions
+$use_pro_library && $the_arguments{'_forcevariablescriteriaspec'} && substitute_static_variables(0,$warn_spec_list,'','warning specification');
+$use_pro_library && $the_arguments{'_forcevariablescriteriaspec'} && substitute_static_variables(0,$critical_spec_list,'critical specification');
 
 $debug && print "Testing TEST VALUES " . Dumper($test_value);
 $debug && print "WARNING SPECS: " . Dumper($warn_spec_list);
@@ -6281,8 +6338,9 @@ my $warn_count=test_multiple_limits($warn_perf_specs_parsed,$test_value,$warn_sp
 
 $debug && print "------------ End Check ------------\n";
 
-$use_pro_library && substitute_static_variables(1,$warn_spec_result_list,'');
-$use_pro_library && substitute_static_variables(1,$critical_spec_result_list,'');
+# no longer needed as substitutions now occur at source ie wmi data collection
+# $use_pro_library && substitute_static_variables(1,$warn_spec_result_list,'','warning specification results');
+# $use_pro_library && substitute_static_variables(1,$critical_spec_result_list,'','critical specification results');
 
 # determine the result type, and load up some other values that can be used for display etc
 $$test_value{'_StatusType'}='';
@@ -6360,7 +6418,7 @@ if ($process_each_row eq '0') {
       # if there are some triggers then show them on the end of the display msg
       $display_msg="$display_msg - $unique_trigger_list";
    }
-   
+
    # overwrite the following fields in collected WMI data in query 0 row 0 only
    # this assumes that everything else that wanted to use the orignal data has already done so
    $$wmidata[$query_index][0]{'_TestResult'}=$max_result;
@@ -6377,7 +6435,7 @@ return $max_result;
 ##-------------------------------------------------------------------------
 #sub initialise_perf_specs {
 ## initialise a performance spec hash to ensure that we do not see any "Use of uninitialized value" errors if it gets used
-## pass in 
+## pass in
 ## the hash to initialise
 ## the hash to copy from (but we make the values all '');
 #my ($spec_hashref,$test_value)=@_;
@@ -6410,7 +6468,7 @@ return @list;
 #-------------------------------------------------------------------------
 sub max {
 # passed in a list of numbers
-# determaxe the maximum one 
+# determaxe the maximum one
 my($max_so_far) = shift @_;  # the first one is the smallest yet seen
 foreach (@_) {               # look at the remaining arguments
   if ($_ > $max_so_far) {    # could this one be smaller
@@ -6433,15 +6491,23 @@ sub convert_WMI_timestamp_to_seconds {
 # pass in a WMI Timestamp like 20100528105127.000000+600
 my ($wmi_timestamp)=@_;
 my $sec='';
-my $age_sec=''; 
+my $age_sec='';
 my $current_dt='';
 my $current_sec='';
 $debug && print "Converting WMI Timestamp $wmi_timestamp to seconds = ";
 my $tz='';
-if ($wmi_timestamp=~/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).(\d*)([+\-])+(\d*)$/) {
+my $timezone_direction='+';
+my $timezone_offset=0;
+#                        1      2      3      4      5      6      7     8        9
+if ($wmi_timestamp=~/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).(\d*)([+\-])+(.{3,3})$/) {
    # now convert that fileage to seconds
+   # firstly look at the time zone offset value
+   # as per https://docs.microsoft.com/en-us/windows/win32/wmisdk/cim-datetime
+   # it would normally be a 3 digit number which is a number of minutes
+   # however it can also be *** which means that there is no time zone and the local time zone (of the windows box) should be used
+   # best we can do at this point is use the time zone of the system that this script is running on instead until we find something better
    $tz=$8 . sprintf("%02d%02d",$9/60,$9%60);
-   my $dt = DateTime->new(
+   my %ts_info=(
       year       => $1,
       month      => $2,
       day        => $3,
@@ -6449,17 +6515,30 @@ if ($wmi_timestamp=~/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).(\d*)([+\-])+(\
       minute     => $5,
       second     => $6,
       nanosecond => $7,
+      time_zone  => '', # set later
+   );
+   $timezone_direction=$8;
+   $timezone_offset=$9;
+
+   # now check the timezone offset
+   if ($timezone_offset=~/\d{3,3}/) {
+      # all good with a 3 digit offset
       # use the timezone of the queried system - convert the WMI timezone (number of minutes) to HHMM for use with DateTime
-      time_zone  => $tz,
-     );
-   
+      $ts_info{'time_zone'}=$timezone_direction . sprintf("%02d%02d",$timezone_offset/60,$timezone_offset%60);
+   } else {
+      # offset could be '***' or something else, in either case use this system local timezone as a best guess
+      $ts_info{'time_zone'}='local';
+   }
+
+   my $dt = DateTime->new(%ts_info);
+
    $sec=$dt->epoch();
    # force the current time into the same timezone as the queried system
    $current_dt=DateTime->now( time_zone => $dt->time_zone() );
    $current_sec=$current_dt->epoch();
    $age_sec=$current_sec-$sec;
 }
-$debug && print "$sec. Now=$current_dt ($current_sec sec). Age=$age_sec sec. TZ converted from $8$9 (sec) to $tz (HHMM)\n";
+$debug && print "$sec. Now=$current_dt ($current_sec sec). Age=$age_sec sec. TZ converted from $timezone_direction$timezone_offset (sec) to $tz (HHMM)\n";
 return $sec,$age_sec;
 }
 #-------------------------------------------------------------------------
@@ -6482,7 +6561,7 @@ my ($display_mode)=@_;
 # $display_mode is a string formatted with a list of items
 # each item is in the format
 # DISPLAYWHAT=DISPLAYWHEN
-# where 
+# where
 # DISPLAYWHAT=ok,warn,critical,unknown
 # DISPLAYWHEN=all,ok,bad
 #
@@ -6513,14 +6592,14 @@ if (scalar(%displaywhatwhen_mode_list)>0) {
       } else {
          $debug && print "Incorrectly formatted DISPLAYWHAT=DISPLAYWHEN ignored\n";
       }
-   } 
+   }
 $debug && print "Got Display-What-When Mode List as " . Dumper(\%displaywhatwhen_mode_list);
 }
 }
 #-------------------------------------------------------------------------
 sub finish_program {
 # generic sub to handle program exit
-# pass in 
+# pass in
 # exit code
 my ($exit_code)=@_;
 
