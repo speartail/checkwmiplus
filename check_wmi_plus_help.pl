@@ -76,7 +76,7 @@ BRIEF
 
  Complete Usage:
 
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash] [--forceVariablesCriteriaSpec]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash] [--forceVariablesCriteriaSpec] [--iRequireAllCriticals] [--iRequireAllWarnings]
 
  Help as a Manpage:
 
@@ -127,9 +127,9 @@ COMMONLY USED OPTIONS
 
  -5 ARG5  argument number 5. Its meaning depends on the MODE/SUBMODE combination.
 
- -w WARN  specify warning criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a warning status (unless a critical status is also triggered). See below for how to specify warning criteria.
+ -w WARN  specify warning criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a warning status (unless a critical status is also triggered). See below for how to specify warning criteria. You can use --iRequireAllWarnings to require that all of the warning criteria must be met before the plugin will exit with a warning status.
 
- -c CRIT  specify critical criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a critical status. See below for how to specify warning criteria.
+ -c CRIT  specify critical criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a critical status. See below for how to specify warning criteria. You can use --iRequireAllCriticals to require that all of the critical criteria must be met before the plugin will exit with a critical status.
 
 LESS COMMONLY USED OPTIONS
  -b BYTEFACTOR  BYTEFACTOR is either 1000 or 1024 and is used for conversion units eg bytes to GB. Default is 1024.
@@ -206,6 +206,9 @@ LESS COMMONLY USED OPTIONS
 
  --filterinirowsbystatus FILTERSTATUS  Filter ini-based checks by their status. This is useful for checks that return many rows and where you may only want to show results that are not ok (for example). This only applies to the per row results and not to the overall state. FILTERSTATUS is a regular expression of Nagios return codes that you wish to display. Nagios return codes are 0-3, where 0=OK, 1=WARNING, 2=CRITICAL, 3=UNKNOWN. In order to display return codes 1 or 2 only a regular expression like 1|2 would be used. To display only OK states (return code 0) a regular expression of 0 would suffice.
 
+ --iRequireAllWarnings  use this option to require that all of the warning criteria must be met before the plugin will exit with a warning status
+
+ --iRequireAllCriticals  use this option to require that all of the critical criteria must be met before the plugin will exit with a critical status.
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc. Keeping State is used by default.
 
@@ -492,14 +495,14 @@ checknetwork
       specify exactly what you want. eg "LAN0" or "192.168.0.1" or "192.168.0" or "LAN0|LAN2" or "." or "08:00:27:85:CE:6D" or "08:00:27"
       To specify a network interface you can use either the Connection Name (as seen in Control Panel), IP Address (IPv4 or IPV6) or MAC Address. You can also use the name of the network adaptors as seen from WMI which is similar to what is seen in the output of the ipconfig/all command on Windows. However, it is not exactly the same and can be tricky since this uses a regular expression. Run without -a to show the interface
       names, IP Addresses, MAC Addresses. Typically you need to use '' around the adapter name when specifying.
-   ARG2  Set this to the string 'legacy' to query the older WMI class (Win32_PerfRawData_Tcpip_NetworkInterface) for obtaining network statistics. You may need to do this for Windows Server versions prior to Windows Server 2012.
+   ARG2  Set this to the string 'legacy' to query the older WMI class (Win32_PerfRawData_Tcpip_NetworkInterface) for obtaining network statistics. You may need to do this for Windows Server versions prior to Windows Server 2012. Set this to the string 'auto' to first try the newer query, then if that fails due to missing WMI classes, try the older query. Obviously, using this on known older target hosts will always run an additional query that will always fail which may slow down the plugin.
    $default_help_text_delay
    WARN/CRIT  can be used as described below.
       $field_lists{'checknetwork'}
    BYTEFACTOR  defaults to 1000 for this mode. You can override this if you wish.
 
    Note:
-      This check does up to 3 WMI queries so it may be slow. You might need to use the -t option. Since 2 of the WMI queries are relatively static, their results are cached and you can set the refresh period for this data using --joinexpiry.
+      This check does up to 3 WMI queries so it may be slow. You might need to use the -t option.
 
    PRO Users can use --includedata and --excludedata for this mode.
 

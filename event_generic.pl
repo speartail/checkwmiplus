@@ -46,7 +46,7 @@ use Getopt::Long;
 my $opt_command=(); # this becomes an array reference
 my $opt_when_to_execute=(); # this becomes an array reference
 my $opt_timeout='';
-my $debug=''; # '/tmp/event_generic.log'; # set this to a file name to log all runs of this event handler, leave blank to run only if parameter specified on command line
+my $debug=''; # '/var/tmp/log/event_generic.log'; # set this to a file name to log all runs of this event handler, leave blank to run only if parameter specified on command line
 my $opt_statelist=(); # this becomes an array reference
 my $opt_timeout='';
 my $opt_regex=(); # this becomes an array reference

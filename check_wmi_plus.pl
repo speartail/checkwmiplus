@@ -43,7 +43,7 @@ use lib "/usr/lib64/nagios/plugins";
 #================================= DECLARATIONS ===============================
 #==============================================================================
 
-our $VERSION=1.65;
+our $VERSION=1.66;
 
 # which version of PRO (if used does this require)
 our $requires_PRO_VERSION=1.30;
@@ -592,6 +592,7 @@ GetOptions(
    "forcewmiccommand"                     => \$force_wmic_command,
    "forcetruncateoutput=s"                => \$the_arguments{'_truncate_output'},
    "forceVariablesCriteriaSpec"           => \$the_arguments{'_forcevariablescriteriaspec'},
+   # --- g ---
    "help"                                 => \$opt_help,
    "helperexpiry=s"                       => \$opt_helper_state_expiry,
    "Hostname=s"                           => \$the_arguments{'_host'},
@@ -617,6 +618,8 @@ GetOptions(
    "itestignorehelperstatefiles"          => \$test_ignorehelperstatefiles,
    "itestignorejoinstatefiles"            => \$test_ignorejoinstatefiles,
    "itestignorekeepstatefiles"            => \$test_ignorekeepstatefiles,
+   "iRequireAllCriticals"                 => \$the_arguments{'_requireallcriticals'},
+   "iRequireAllWarnings"                  => \$the_arguments{'_requireallwarnings'},
    "joinexpiry=s"                         => \$opt_join_state_expiry,
    "keepexpiry=s"                         => \$opt_keep_state_expiry,
    "keepid=s"                             => \$opt_keep_state_id,
@@ -633,6 +636,8 @@ GetOptions(
    "nodatastring=s"                       => \$the_arguments{'_nodatastring'},
    "otheraguments=s"                      => \$the_arguments{'_arg2'},
    "password=s"                           => \$opt_password,
+   # --- q ---
+   # --- r ---
    "submode=s"                            => \$opt_submode,
    "timeout=i"                            => \$the_arguments{'_timeout'},
    "username=s"                           => \$opt_username,
@@ -760,10 +765,10 @@ if ($debug || $test_generate) {
          print "ENV=" . Dumper(\%ENV);
          print "--------------------- Computer System ---------------------\n";
          get_wmi_data(1,'',"SELECT * FROM Win32_ComputerSystem",
-         '','',my $dummy1,\$the_arguments{'_delay'},undef,0);
+         '','',my $dummy1,\$the_arguments{'_delay'},undef,0,0);
          print "--------------------- Operating System ---------------------\n";
          get_wmi_data(1,'',"SELECT * FROM Win32_OperatingSystem",
-         '','',my $dummy2,\$the_arguments{'_delay'},undef,0);
+         '','',my $dummy2,\$the_arguments{'_delay'},undef,0,0);
          $wmic_delimiter='|';
          $wmic_split_delimiter='\|';
          print "-------------------------- Time ---------------------\n";
@@ -782,7 +787,7 @@ if ($opt_package) {
    # tar up the files and dir, exclude subversion directory
    # run the plugin and put its help screen in a readme
    my $output=`$0 --itexthelp --noishowusage --noicollectusage`;
-   open(README,">$base_dir/check_wmi_plus.README.txt");
+   open(README,'>',"$base_dir/check_wmi_plus.README.txt");
    print README "check_wmi_plus v$VERSION\nFor installation details and more downloads see http://www.edcint.co.nz/checkwmiplus\nThe --help output follows - \n\n";
    print README $output;
    close(README);
@@ -1164,7 +1169,7 @@ my %variables=();
 
 if ( -f $example_file) {
 
-   if ( open(EXAMPLE,$example_file) ) {
+   if ( open(EXAMPLE,'<',$example_file) ) {
       $debug && print "File opened\n";
       foreach my $line (<EXAMPLE>) {
          chomp($line);
@@ -1403,12 +1408,13 @@ sub get_wmi_data {
 #     - array index [0][ROWNUMBER] prefixed by _QuerySum_fieldname which sums up all the fieldnames across multiple queries
 #     - array index [QUERYNUMBER][0] prefixed by _ColSum_fieldname which sums up all the fieldnames (columns) for multiple rows in a single query number QUERYNUMBER
 # set $slash_conversion to 1 if we should replace all / in the WMI query with \\
+# not_fatal: =0 if errors getting WMI data cause the plugin to die in this function =1 if errors getting WMI data return to caller
 
 # we return
 # 1) an empty string if it worked ok, a msg if it failed
 # 2) the index of in the array of where the latest data is stored
 
-my ($num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion)=@_;
+my ($num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion,$errors_not_fatal)=@_;
 
 # the array @[$results} will look something like this when we have loaded it
 # @array[INDEX1][INDEX2]{HASH1}=VALUE
@@ -1646,8 +1652,8 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
    if ($debug) {
       # mask the user name and password in the wmic command, but not if $opt_z is set
       my $cmd=$wmi_commandline;
-      if (! $opt_z) {
-      $cmd=~s/-U$wmi_query_quote $wmi_query_quote(.*?)%(.*?)$wmi_query_quote /-U${wmi_query_quote} ${wmi_query_quote}USER%PASS${wmi_query_quote} /;
+      if ($opt_z ne '') {
+         $cmd=~s/-U$wmi_query_quote $wmi_query_quote(.*?)%(.*?)$wmi_query_quote /-U${wmi_query_quote} ${wmi_query_quote}USER%PASS${wmi_query_quote} /;
       }
       print "Round #" . ($i+1) . " of $num_samples\n";
       if ($use_wmilib && ! $force_wmic_command) {
@@ -1696,7 +1702,7 @@ for (my $i=$start_wmi_query_number;$i<$num_samples;$i++) {
          # we don't actually run wmic - we just pretend we do
          # we get the wmic output from a file
          my $test_wmic_filename="${test_wmic_file_base}_${test_number}_${global_wmic_call_counter}\n";
-         if (open (WMICO,$test_wmic_filename)) {
+         if (open (WMICO,'<',$test_wmic_filename)) {
             my @wmic_data=<WMICO>;
             $debug && print "Using Test Mode wmic output from $test_wmic_filename\n";
             $output=join('',@wmic_data);
@@ -1996,77 +2002,84 @@ if ($failure>0) {
    $sub_result=$all_output;
 }
 
-#$running_within_nagios
-if ($keep_state_mode==1) {
-   # done one WMI query and need to store it in the file for next time
-   # check for wmi errors first
-   check_for_data_errors($sub_result);
-   # add a create timestamp to the data
-   $debug && print "Storing WMI results in the state file for the first time\n";
-   store_state_data($results);
-   # now exit the plugin with an unknown state since we only have the first lot of WMI data
-   $plugin_output.="Collecting first WMI sample because $get_data_for_the_first_time. Results will be shown the next time the plugin runs.\n";
-   finish_program($ERRORS{'UNKNOWN'});
-} elsif ($keep_state_mode==2) {
-   # we retrieved WMI data this time round from the file
-   # we then did one more WMI query to get a complete set
-   # now we need to write the WMI data from the second query to the file for the next time the plugin runs
-   # we have to munge the data a little first
+# check for data errors but it is not fatal with the sub
+my $error_message=check_for_data_errors($sub_result,$errors_not_fatal);
 
-   # check for wmi errors first
-   check_for_data_errors($sub_result);
+if ($errors_not_fatal && $error_message) {
+   # we want to return to caller
+   $debug && print "WMI errors were encountered by they are not going to be treated as immediately fatal\n";
+} else {
 
-   my $stored_results;
-   $$stored_results[0]=$$results[1];
-   # now munge the data
-   # we need to set a value for _ChecksOK, since there will not be one
-   # we do this since we just took WMI query 1 and it will become WMI query 0 next plugin run and we will expect a value for _ChecksOK next run
-   # each WMI query already has an ItemCount, if this is set to at least 1 then the query was ok
-   if (defined($$stored_results[0][0]{'_ItemCount'})) {
-      if ($$stored_results[0][0]{'_ItemCount'} ge 1) {
-         $$stored_results[0][0]{'_ChecksOK'}=1;
+   #$running_within_nagios
+   if ($keep_state_mode==1) {
+      # done one WMI query and need to store it in the file for next time
+      # check for wmi errors first
+      # add a create timestamp to the data
+      $debug && print "Storing WMI results in the state file for the first time\n";
+      store_state_data($results);
+      # now exit the plugin with an unknown state since we only have the first lot of WMI data
+      $plugin_output.="Collecting first WMI sample because $get_data_for_the_first_time. Results will be shown the next time the plugin runs.\n";
+      finish_program($ERRORS{'UNKNOWN'});
+   } elsif ($keep_state_mode==2) {
+      # we retrieved WMI data this time round from the file
+      # we then did one more WMI query to get a complete set
+      # now we need to write the WMI data from the second query to the file for the next time the plugin runs
+      # we have to munge the data a little first
+
+      # check for wmi errors first
+
+      my $stored_results;
+      $$stored_results[0]=$$results[1];
+      # now munge the data
+      # we need to set a value for _ChecksOK, since there will not be one
+      # we do this since we just took WMI query 1 and it will become WMI query 0 next plugin run and we will expect a value for _ChecksOK next run
+      # each WMI query already has an ItemCount, if this is set to at least 1 then the query was ok
+      if (defined($$stored_results[0][0]{'_ItemCount'})) {
+         if ($$stored_results[0][0]{'_ItemCount'} ge 1) {
+            $$stored_results[0][0]{'_ChecksOK'}=1;
+         }
       }
-   }
-   $debug && print "Storing new WMI results in the state file " . Dumper($stored_results);
-   store_state_data($stored_results);
-}
-
-# if $final_data_array_index is not zero then we have to copy some fields to the new index
-# we wrote them to the 0 index since it was guaranteed to be in existence throughout the WMI query process
-if ($final_data_array_index>0) {
-   $debug && print "Copying predefined fields to the last WMI result set [0] to [$final_data_array_index]\n";
-
-   # we want to move the following fields
-   # _KeepStateCreateTimestamp
-   # _KeepStateSamplePeriod
-   # _ChecksOK
-   # these ones are always in WMI Query #0 and in row #0
-   $$results[$final_data_array_index][0]{'_ChecksOK'}=$$results[0][0]{'_ChecksOK'};
-   $$results[$final_data_array_index][0]{'_KeepStateCreateTimestamp'}=$$results[0][0]{'_KeepStateCreateTimestamp'};
-   $$results[$final_data_array_index][0]{'_KeepStateSamplePeriod'}=$$results[0][0]{'_KeepStateSamplePeriod'};
-
-   # delete the old data just to make sure we are no longer using it in our code
-   delete $$results[0][0]{'_ChecksOK'};
-   delete $$results[0][0]{'_KeepStateCreateTimestamp'};
-   delete $$results[0][0]{'_KeepStateSamplePeriod'};
-
-   # Those first ones were easy since they are always in the same place
-   # Now we want to get any _QuerySum fields
-   # They are always in WMI query #zero as well but can be in each row of the result set, plus the field name starts with _QuerySum
-   # we already know the fields that are being summed since they are stored in @{$provide_sums}
-   # we drive this outside loop based on @{$provide_sums}, since if that is empty nothing will happen
-   foreach my $field_name (@{$provide_sums}) {
-      my $found=0;
-      foreach my $row (@{$$results[0]}) {
-         # grab the $field_name from array index [0][$found] and copy it to the last array index
-         $debug && print "   Copying _QuerySum_$field_name ...\n";
-         $$results[$final_data_array_index][$found]{"_QuerySum_$field_name"}=$$results[0][$found]{"_QuerySum_$field_name"};
-         # delete the old data just to make sure we are no longer using it in our code
-         delete $$results[0][$found]{"_QuerySum_$field_name"};
-      }
+      $debug && print "Storing new WMI results in the state file " . Dumper($stored_results);
+      store_state_data($stored_results);
    }
 
-   $debug && print "NEW WMI DATA:" . Dumper($results);
+   # if $final_data_array_index is not zero then we have to copy some fields to the new index
+   # we wrote them to the 0 index since it was guaranteed to be in existence throughout the WMI query process
+   if ($final_data_array_index>0) {
+      $debug && print "Copying predefined fields to the last WMI result set [0] to [$final_data_array_index]\n";
+
+      # we want to move the following fields
+      # _KeepStateCreateTimestamp
+      # _KeepStateSamplePeriod
+      # _ChecksOK
+      # these ones are always in WMI Query #0 and in row #0
+      $$results[$final_data_array_index][0]{'_ChecksOK'}=$$results[0][0]{'_ChecksOK'};
+      $$results[$final_data_array_index][0]{'_KeepStateCreateTimestamp'}=$$results[0][0]{'_KeepStateCreateTimestamp'};
+      $$results[$final_data_array_index][0]{'_KeepStateSamplePeriod'}=$$results[0][0]{'_KeepStateSamplePeriod'};
+
+      # delete the old data just to make sure we are no longer using it in our code
+      delete $$results[0][0]{'_ChecksOK'};
+      delete $$results[0][0]{'_KeepStateCreateTimestamp'};
+      delete $$results[0][0]{'_KeepStateSamplePeriod'};
+
+      # Those first ones were easy since they are always in the same place
+      # Now we want to get any _QuerySum fields
+      # They are always in WMI query #zero as well but can be in each row of the result set, plus the field name starts with _QuerySum
+      # we already know the fields that are being summed since they are stored in @{$provide_sums}
+      # we drive this outside loop based on @{$provide_sums}, since if that is empty nothing will happen
+      foreach my $field_name (@{$provide_sums}) {
+         my $found=0;
+         foreach my $row (@{$$results[0]}) {
+            # grab the $field_name from array index [0][$found] and copy it to the last array index
+            $debug && print "   Copying _QuerySum_$field_name ...\n";
+            $$results[$final_data_array_index][$found]{"_QuerySum_$field_name"}=$$results[0][$found]{"_QuerySum_$field_name"};
+            # delete the old data just to make sure we are no longer using it in our code
+            delete $$results[0][$found]{"_QuerySum_$field_name"};
+         }
+      }
+
+      $debug && print "NEW WMI DATA:" . Dumper($results);
+   }
 }
 
 return $sub_result,$final_data_array_index;
@@ -3157,48 +3170,56 @@ if ($data_errors) {
 sub check_for_data_errors {
 # pass in
 # the output of the wmi query sub
-my ($data_errors)=@_;
+# a boolean which =0 if an error is fatal =1 if an error is not fatal
+my ($data_errors,$not_fatal)=@_;
+my $temp_plugin_output='';
 if ($data_errors) {
-   $plugin_output.="UNKNOWN - The WMI query had problems.";
+   $temp_plugin_output.="UNKNOWN - The WMI query had problems.";
    if ($data_errors=~/NT_STATUS_ACCESS_DENIED/i) {
       my $extra_msg='';
       if ($opt_auth_file) {
          $extra_msg=" Your Authentication File might be incorrectly formatted or inaccessible. ";
       }
-      $plugin_output.=" You might have your username/password wrong or the user's access level is too low. ${extra_msg}Wmic error text on the next line.\n";
+      $temp_plugin_output.=" You might have your username/password wrong or the user's access level is too low. ${extra_msg}Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041010/i) {
-      $plugin_output.=" The plugin is having trouble finding the required WMI Classes on the target host ($the_arguments{_host}). There can be multiple reasons for this (please go through them and check) including permissions problems (try using an admin login) or software that creates the class is not installed (eg if you are trying to checkiis but IIS is not installed). It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions or your version of Windows does not even have the required WMI class). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes the WMI service is not running, other times a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
+      $temp_plugin_output.=" The plugin is having trouble finding the required WMI Classes on the target host ($the_arguments{_host}). There can be multiple reasons for this (please go through them and check) including permissions problems (try using an admin login) or software that creates the class is not installed (eg if you are trying to checkiis but IIS is not installed). It can also happen if your version of Windows does not support this check (this might be because the WMI fields are named differently in different Windows versions or your version of Windows does not even have the required WMI class). Sometimes, some systems 'lose' WMI Classes and you might need to rebuild your WMI repository. Sometimes the WMI service is not running, other times a reboot can fix it. Other causes include mistyping the WMI namesspace/class/fieldnames. There may be other causes as well. You can use wmic from the command line to troubleshoot. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x8007000e/i) {
-      $plugin_output.=" We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of services. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+      $temp_plugin_output.=" We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of services. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041003/i) {
-      $plugin_output.=" This is most likely a WMI permissions error. The process trying to access the WMI namespace most likely does not have the correct WMI permissions. The following link is believed to be relevant for Windows Server 2003, 2008R2 and 2012R2 - http://support.microsoft.com/kb/907460. Wmic error text on the next line.\n";
+      $temp_plugin_output.=" This is most likely a WMI permissions error. The process trying to access the WMI namespace most likely does not have the correct WMI permissions. The following link is believed to be relevant for Windows Server 2003, 2008R2 and 2012R2 - http://support.microsoft.com/kb/907460. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041004/i) {
-      $plugin_output.=" We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of processes. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+      $temp_plugin_output.=" We're not exactly sure what this error is. When we've seen it, it only seems to affect checks of processes. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x80041045/i) {
-      $plugin_output.=" We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
-   } elsif ($data_errors=~/0x80041045/i) {
-      $plugin_output.=" We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+      $temp_plugin_output.=" We're not exactly sure what this error is. Restarting the WMI service can fix it. A reboot can fix it as well. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+   } elsif ($data_errors=~/0x80010111/i) {
+      $temp_plugin_output.=" We're not exactly sure what this error is. It was first seen in the Windows 10 version 2004. It may be some kind of authentication change. As of April 2021, this problem is fixed with a newer version of wmic from www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x800706ba|c00000b5/i) {
-      $plugin_output.="  This error can appear when the Windows firewall on the target machine is blocking the connection. There may be other causes. Wmic error text on the next line.\n";
+      $temp_plugin_output.="  This error can appear when the Windows firewall on the target machine is blocking the connection. There may be other causes. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/0x800705af/i) {
       # error reported by toni.garcia@sistel.es
-      $plugin_output.="  This error appears to mean that the paging file is too small for this operation to complete, but if there sufficient paging space, you can reboot the $the_arguments{_host} as a workaround.\n. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
+      $temp_plugin_output.="  This error appears to mean that the paging file is too small for this operation to complete, but if there sufficient paging space, you can reboot the $the_arguments{_host} as a workaround.\n. If you can tell us more about this error contact us via www.edcint.co.nz/checkwmiplus. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_IO_TIMEOUT/i) {
-      $plugin_output.=" The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Is $the_arguments{_host} the correct hostname?. The host might even be up but just too busy. Wmic error text on the next line.\n";
+      $temp_plugin_output.=" The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Is $the_arguments{_host} the correct hostname?. The host might even be up but just too busy. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_HOST_UNREACHABLE/i) {
-      $plugin_output.=" The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Looks like a valid name/IP Address. $the_arguments{_host} is probably not even pingable. Wmic error text on the next line.\n";
+      $temp_plugin_output.=" The target host ($the_arguments{_host}) might not be reachable over the network. Is it down? Looks like a valid name/IP Address. $the_arguments{_host} is probably not even pingable. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_UNEXPECTED_NETWORK_ERROR/i) {
-      $plugin_output.=" This error has been reported when your DNS lookup configuration is not quite right. $the_arguments{_host} might be using a FQDN and/or you have no 'search' setting in your /etc/resolv.conf file. Wmic error text on the next line.\n";
+      $temp_plugin_output.=" This error has been reported when your DNS lookup configuration is not quite right. $the_arguments{_host} might be using a FQDN and/or you have no 'search' setting in your /etc/resolv.conf file. Wmic error text on the next line.\n";
    } elsif ($data_errors=~/NT_STATUS_CONNECTION_REFUSED/i) {
-      $plugin_output.=" The target host ($the_arguments{_host}) did not allow our network connection. It is a valid name/IP Address. A firewall might be blocking us. There might be some critical services not running. Is it even running Windows?  Wmic error text on the next line.\n";
+      $temp_plugin_output.=" The target host ($the_arguments{_host}) did not allow our network connection. It is a valid name/IP Address. A firewall might be blocking us. There might be some critical services not running. Is it even running Windows?  Wmic error text on the next line.\n";
    } elsif ($data_errors=~/^.{0,5}TIMEOUT.{0,5}$/i) {
-      $plugin_output.=" The WMI Client Library timed out. There are multiple possible reasons for this, some of them include - The host $the_arguments{_host} might just be really busy, it might not even be running Windows. Error text on the next line.\n";
+      $temp_plugin_output.=" The WMI Client Library timed out. There are multiple possible reasons for this, some of them include - The host $the_arguments{_host} might just be really busy, it might not even be running Windows. Error text on the next line.\n";
    } else {
-      $plugin_output.=" The error text from wmic is: ";
+      $temp_plugin_output.=" The error text from wmic is: ";
    }
-   $plugin_output.=$data_errors;
-   finish_program($ERRORS{'UNKNOWN'});
+   $temp_plugin_output.=$data_errors;
+   if ($not_fatal) {
+      # there are errors but they are not fatal probably since calling sub wants to handle errors
+   } else {
+      $plugin_output.=$temp_plugin_output;
+      finish_program($ERRORS{'UNKNOWN'});
+   }
 }
+return $temp_plugin_output;
 }
 #-------------------------------------------------------------------------
 sub clude_wmi_data {
@@ -3500,7 +3521,7 @@ foreach my $join_config (@{$join_config_list}) {
       my @jc=split(/,/,$join_config);
       my @join_data=(); # temp array for join data from wmi query
       my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join($jc[0],$collected_data,$last_wmi_data_index,$jc[2],$jc[3],$jc[4],$jc[5],$jc[6],$jc[7],$jc[8],$jc[9],
-         $$join_query_list[$i],'','',\@join_data,\$the_arguments{'_delay'},undef,0);
+         $$join_query_list[$i],'','',\@join_data,\$the_arguments{'_delay'},undef,0,0);
       $debug && print "JOIN DATA  " . Dumper(\@join_data);
    }
    $i++;
@@ -3627,7 +3648,7 @@ if ($query) {
 
       my @collected_data;
       my ($data_errors,$last_wmi_data_index)=get_wmi_data($number_wmi_samples,$ini_namespace,$query,
-         $custom_header_regex,$custom_data_regex,\@collected_data,\$the_arguments{'_delay'},\@calc_array,$wmi_ini->val($ini_section,'slashconversion',''));
+         $custom_header_regex,$custom_data_regex,\@collected_data,\$the_arguments{'_delay'},\@calc_array,$wmi_ini->val($ini_section,'slashconversion',''),0);
 
       check_for_data_errors($data_errors);
 
@@ -3735,7 +3756,7 @@ sub checkgeneric {
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "SELECT * FROM Win32_PerfFormattedData_PerfDisk_PhysicalDisk where name = \"c:\"",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 
 check_for_data_errors($data_errors);
 my $test_result=test_limits($opt_warn,$opt_critical,$collected_data[$last_wmi_data_index][0],\%warn_perf_specs_parsed,\%critical_perf_specs_parsed,\@warn_spec_result_list,\@critical_spec_result_list);
@@ -3756,7 +3777,7 @@ if ($the_arguments{'_delay'} eq '') {
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(2,'',
    "select PercentProcessorTime,Timestamp_Sys100NS from Win32_PerfRawData_PerfOS_Processor where Name=\"_Total\"",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 
 check_for_data_errors($data_errors);
 # at this point we can assume that we have all the data we need stored in @collected_data
@@ -3797,16 +3818,40 @@ if ($the_arguments{'_arg1'} eq '') {
    $num_samples=1;
 }
 
+my $legacy_interface_query='select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,Frequency_Sys100NS,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfRawData_Tcpip_NetworkInterface';
+
 # default interface stats query for server 2012 and above
 my $interface_query='select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,Frequency_Sys100NS,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfRawData_Tcpip_NetworkAdapter';
 
 if ($the_arguments{'_arg2'} eq 'legacy') {
-   $interface_query='select CurrentBandwidth,BytesReceivedPerSec,BytesSentPerSec,Name,Frequency_Sys100NS,OutputQueueLength,PacketsReceivedErrors,PacketsReceivedPerSec,PacketsSentPerSec,Timestamp_Sys100NS from Win32_PerfRawData_Tcpip_NetworkInterface';
+   $interface_query=$legacy_interface_query;
 }
 
-my ($data_errors,$last_wmi_data_index)=get_wmi_data($num_samples,'',$interface_query,'','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+my $data_errors;
+my $last_wmi_data_index;
 
-check_for_data_errors($data_errors);
+my $query_needed=1;
+my $first_query=1;
+# loop intended to do
+# 1) only one query unless _arg2 is set to auto
+# 2) only one query if _arg2 is set to auto and it works ok first time
+# 3) a second query if _arg2 is set to auto and it fails first time
+while ($query_needed) {
+   # this wmi query must be done as not fatal so that we can handle them in this sub rather than the query sub
+   ($data_errors,$last_wmi_data_index)=get_wmi_data($num_samples,'',$interface_query,'','',\@collected_data,\$the_arguments{'_delay'},undef,0,1);
+
+   if ($the_arguments{'_arg2'} eq 'auto' && $first_query && $data_errors=~/0x80041010/) {
+      # the query failed to find the WMI classes
+      # this could be because they don't exist because the new query was used targetted at a legacy host
+      # try the query again, using the legacy query instead
+      $interface_query=$legacy_interface_query;
+      $first_query=0;
+      $debug && print "Auto query mode is changing the WMI query to try a legacy query to see if that works\n";
+   } else {
+      check_for_data_errors($data_errors);
+      $query_needed=0;
+   }
+}
 
 ## now join the mapping between mac address and the network data device name
 ## have to replace all the non alpha characters in both items to get a match
@@ -3814,7 +3859,7 @@ check_for_data_errors($data_errors);
 $debug && print "Data Join on the Name to find the MAC address\n";
 my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('NetMacMap',\@collected_data,$last_wmi_data_index,'Name','\W','_','Description','\W','_',1,'',
    "select ipaddress,description,macaddress,ipsubnet,defaultipgateway,dhcpenabled,dhcpserver,dnsdomain,servicename from win32_networkadapterconfiguration where macaddress like '%:%'",
-   '','',\@mac_mapping,\$the_arguments{'_delay'},undef,0);
+   '','',\@mac_mapping,\$the_arguments{'_delay'},undef,0,0);
 
 ## now join the mapping between mac address connection netconnectionid
 ## have to replace all the non alpha characters in both items to get a match
@@ -3822,7 +3867,7 @@ my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('NetMacMap',\@c
 $debug && print "Data Join on the MAC Address to find the NetConnectionID (Windows friendly name)\n";
 ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('NetNameMap',\@collected_data,$last_wmi_data_index,'MACAddress','',undef,'MACAddress','',undef,1,'',
    "select macaddress,netconnectionID from win32_networkadapter where netconnectionid like '%'",
-   '','',\@netid_mapping,\$the_arguments{'_delay'},undef,0);
+   '','',\@netid_mapping,\$the_arguments{'_delay'},undef,0,0);
 
 # process includes and excludes of WMI data for Pro - after all WMI queries and joins and after check_for_data_errors - before we start looking through the returned WMI data
 $use_pro_library && process_cludes_like_a_pro(\@opt_include_data,\@opt_exclude_data,\@collected_data,1,$last_wmi_data_index);
@@ -3935,7 +3980,7 @@ $opt_keep_state=0;
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data($the_arguments{'_arg1'},'',
    "select ProcessorQueueLength from Win32_PerfRawData_PerfOS_System",
-   '','',\@collected_data,\$the_arguments{'_delay'},[ 'ProcessorQueueLength' ],0);
+   '','',\@collected_data,\$the_arguments{'_delay'},[ 'ProcessorQueueLength' ],0,0);
 
 check_for_data_errors($data_errors);
 # at this point we can assume that we have all the data we need stored in @collected_data
@@ -3997,7 +4042,7 @@ return %lookup_results;
 #
 #my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
 #   "Select dnsdomain,dnshostname,ipaddress,ipsubnet,macaddress,description from Win32_NetworkAdapterConfiguration",
-#   '','',\@collected_data,\$the_arguments{'_delay'},undef,1);
+#   '','',\@collected_data,\$the_arguments{'_delay'},undef,1,0);
 #
 #check_for_data_errors($data_errors);
 #no_data_check($collected_data[$last_wmi_data_index][0]{'_ItemCount'});
@@ -4087,7 +4132,7 @@ if ($return_values || $the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i 
    # we only want data fields 1 4 5 so that we match the column headings
    ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select Name,FreePhysicalMemory,TotalVisibleMemorySize from Win32_OperatingSystem",
-   '','1,4,5',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','1,4,5',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 
    # this query returns FreePhysicalMemory,TotalVisibleMemorySize - we move them to the standard fields of _MemFreeK and _MemTotalK so that we can process them in a standard way
    # if there has been a problem with the query then they might not be set
@@ -4111,7 +4156,7 @@ if ($return_values || $the_arguments{'_arg1'}=~/phys/i || $opt_submode=~/phys/i 
    #   # we only want data fields 1 4 5 so that we match the column headings
    #   $data_errors=get_wmi_data(1,'',
    #   "Select Name,FreeVirtualMemory,TotalVirtualMemorySize from Win32_OperatingSystem",
-   #   '','1,4,5',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   #   '','1,4,5',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
    #
    #   # this query returns FreePhysicalMemory,TotalVisibleMemorySize - we move them to the standard fields of _MemFreeK and _MemTotalK so that we can process them in a standard way
    #   # if there has been a problem with the query then they might not be set
@@ -4153,7 +4198,7 @@ my @page_size_mapping;
 
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select Name,AllocatedBaseSize,CurrentUsage,PeakUsage from Win32_PageFileUsage",
-   '','',\@collected_data,\$the_arguments{'_delay'},['CurrentUsage','AllocatedBaseSize', 'PeakUsage'],0);
+   '','',\@collected_data,\$the_arguments{'_delay'},['CurrentUsage','AllocatedBaseSize', 'PeakUsage'],0,0);
 
 check_for_data_errors($data_errors);
 no_data_check($collected_data[$last_wmi_data_index][0]{'_ItemCount'});
@@ -4166,7 +4211,7 @@ if ($the_arguments{'_arg1'}=~/auto/) {
    ## we specify these joins as being able to use a state file since we expect them to be quite static
    my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('PageMap',\@collected_data,$last_wmi_data_index,'Name','\W*','','Name','\W*','',1,'',
       "Select InitialSize,MaximumSize from Win32_PageFileSetting",
-      '','',\@page_size_mapping,\$the_arguments{'_delay'},undef,0);
+      '','',\@page_size_mapping,\$the_arguments{'_delay'},undef,0,0);
 }
 
 if ($the_arguments{'_arg2'} eq '') {
@@ -4360,7 +4405,7 @@ my @collected_data;
 
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select name,lastmodified from CIM_DataFile where name=\"$the_arguments{'_arg1'}\"",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,1);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,1,0);
 
 check_for_data_errors($data_errors);
 
@@ -4409,7 +4454,7 @@ sub checkfilesize {
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select name,filesize from CIM_DataFile where name=\"$the_arguments{'_arg1'}\"",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,1);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,1,0);
 
 # have to initialise this incase the file is not found
 $collected_data[$last_wmi_data_index][0]{'FileSize'}=$collected_data[$last_wmi_data_index][0]{'FileSize'} || 0;
@@ -4459,7 +4504,7 @@ my @collected_data;
 
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select name,filesize from CIM_DataFile where drive=\"$drive_letter\" AND path $operator \"${path}$wildcard\"",
-   '','',\@collected_data,\$the_arguments{'_delay'},['FileSize'],1);
+   '','',\@collected_data,\$the_arguments{'_delay'},['FileSize'],1,0);
 
 # have to initialise this incase the file is not found
 $collected_data[$last_wmi_data_index][0]{'_FolderSize'}=0;
@@ -4505,7 +4550,7 @@ my $where_time_part="TimeGenerated > \"" . $age->year . sprintf("%02d",$age->mon
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select SourceName,Message from Win32_NTLogEvent where Logfile=\"Application\" and EventType < 2 and SourceName = \"Windows Server Update Services\" and $where_time_part",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 
 check_for_data_errors($data_errors);
 
@@ -4564,7 +4609,7 @@ $process_exclude_regex=~s#\/#\\\\#g;
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "select Name,CommandLine,ExecutablePath from Win32_Process",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 
 check_for_data_errors($data_errors);
 
@@ -4656,7 +4701,7 @@ my @collected_data;
 my $before_epoch=time();
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select * from Win32_UTCTime",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 
 check_for_data_errors($data_errors);
 
@@ -4720,7 +4765,7 @@ if (lc($the_arguments{'_arg1'}) eq 'auto') {
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "select name, displayname, Started, StartMode, State, Status FROM Win32_Service $where_bit",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 
 check_for_data_errors($data_errors);
 
@@ -4878,7 +4923,7 @@ if ($the_arguments{'_arg1'}) {
 # first get the smart status
 ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'root/wmi',
    "Select Active,InstanceName,PredictFailure from MSStorageDriver_FailurePredictStatus",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 check_for_data_errors($data_errors);
 
 # now get the smart data and join it to the smart status
@@ -4886,7 +4931,7 @@ check_for_data_errors($data_errors);
 if (scalar keys %smartattributes) {
    my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('',\@collected_data,$last_wmi_data_index,'InstanceName','',undef,'InstanceName','',undef,1,'root/wmi',
       "Select Active,InstanceName,VendorSpecific from MSStorageDriver_FailurePredictData",
-      '','',\@smart_data,\$the_arguments{'_delay'},undef,0);
+      '','',\@smart_data,\$the_arguments{'_delay'},undef,0,0);
 }
 
 # now join the mapping between DeviceID and PNPDeviceID onto the smart status
@@ -4895,13 +4940,13 @@ if (scalar keys %smartattributes) {
 # we specify these joins as being able to use a state file since we expect them to be quite static
 my ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('InstPNPDev',\@collected_data,$last_wmi_data_index,'InstanceName','^(.*?)_\d+$',undef,'PNPDeviceID','',undef,1,'',
    "Select DeviceID,Model,PNPDeviceID from Win32_DiskDrive",
-   '','',\@pnpdevice_mapping,\$the_arguments{'_delay'},undef,0);
+   '','',\@pnpdevice_mapping,\$the_arguments{'_delay'},undef,0,0);
 
 # finally join the mapping between DeviceID (tag) Serial Number onto the smart status
 # we specify these joins as being able to use a state file since we expect them to be quite static
 ($dummy_data_errors,$dummy_last_wmi_data_index)=wmi_data_join('TagSN',\@collected_data,$last_wmi_data_index,'DeviceID','',undef,'Tag','',undef,1,'',
    "Select Tag,SerialNumber from Win32_PhysicalMedia",
-   '','',\@serial_mapping,\$the_arguments{'_delay'},undef,0);
+   '','',\@serial_mapping,\$the_arguments{'_delay'},undef,0,0);
 
 # process includes and excludes of WMI data for Pro - after all WMI queries and joins and after check_for_data_errors - before we start looking through the returned WMI data
 $use_pro_library && process_cludes_like_a_pro(\@opt_include_data,\@opt_exclude_data,\@collected_data,1,$last_wmi_data_index);
@@ -4996,7 +5041,7 @@ my @collected_data;
 #33166
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select SystemUpTime,Frequency_Sys100NS,Timestamp_Object from Win32_PerfRawData_PerfOS_System",
-   '','',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 
 check_for_data_errors($data_errors);
 
@@ -5036,7 +5081,7 @@ sub checkdrivesize {
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select DeviceID,freespace,Size,VolumeName from Win32_LogicalDisk where DriveType=3",
-   '','',\@collected_data,\$the_arguments{'_delay'},['FreeSpace','Size'],0);
+   '','',\@collected_data,\$the_arguments{'_delay'},['FreeSpace','Size'],0,0);
 
 #CLASS: Win32_LogicalDisk
 #DeviceID|FreeSpace|Size|VolumeName
@@ -5233,7 +5278,7 @@ sub checkvolsize {
 my @collected_data;
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select Capacity,DeviceID,DriveLetter,DriveType,FileSystem,FreeSpace,Label,Name from Win32_Volume where DriveType=3",
-   '','',\@collected_data,\$the_arguments{'_delay'},['FreeSpace','Capacity'],0);
+   '','',\@collected_data,\$the_arguments{'_delay'},['FreeSpace','Capacity'],0,0);
 
 #CLASS: Win32_Volume
 #Capacity|DeviceID|DriveLetter|DriveType|FileSystem|FreeSpace|Label|Name|SystemVolume
@@ -5529,7 +5574,7 @@ my @collected_data;
 #System|Printer 5D PDF Creator (from MATTHEW) was deleted.|101949|Print|20110521153921.000000+600|warning
 my ($data_errors,$last_wmi_data_index)=get_wmi_data(1,'',
    "Select EventCode,EventIdentifier,Type,LogFile,SourceName,Message,TimeGenerated from Win32_NTLogEvent where ( $logfile_wherebit ) and $severity_wherebit and $where_time_part",
-   '','(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\n',\@collected_data,\$the_arguments{'_delay'},undef,0);
+   '','(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\n',\@collected_data,\$the_arguments{'_delay'},undef,0,0);
 
 check_for_data_errors($data_errors);
 
@@ -5578,16 +5623,16 @@ sub wmi_data_join {
 # the base array is modified with the extra data from the additional array
 
 # additionally we make the values all lower case for comparison
-my ($use_join_state_file,$base_array,$last_wmi_data_index,$base_field,$base_regex,$base_replacement,$extra_field,$extra_regex,$extra_replacement,$num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion)=@_;
+my ($use_join_state_file,$base_array,$last_wmi_data_index,$base_field,$base_regex,$base_replacement,$extra_field,$extra_regex,$extra_replacement,$num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,$specified_delay,$provide_sums,$slash_conversion,$errors_not_fatal)=@_;
 
 $debug && print "Performing Join on MWI data using $base_field ($base_regex) to match to $extra_field ($extra_regex) in data from $wmi_query\n";
 my $data_errors;
 my $join_last_wmi_data_index;
 
 if ($use_pro_library) {
-   ($data_errors,$join_last_wmi_data_index)=cacheable_get_wmi_data($use_join_state_file,$opt_join_state_expiry,$test_ignorejoinstatefiles,$num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,\$specified_delay,$provide_sums,$slash_conversion);
+   ($data_errors,$join_last_wmi_data_index)=cacheable_get_wmi_data($use_join_state_file,$opt_join_state_expiry,$test_ignorejoinstatefiles,$num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,\$specified_delay,$provide_sums,$slash_conversion,$errors_not_fatal);
 } else {
-   ($data_errors,$join_last_wmi_data_index)=get_wmi_data($num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,\$specified_delay,$provide_sums,$slash_conversion);
+   ($data_errors,$join_last_wmi_data_index)=get_wmi_data($num_samples,$wmi_namespace,$wmi_query,$column_name_regex,$value_regex,$results,\$specified_delay,$provide_sums,$slash_conversion,$errors_not_fatal);
 }
 
 
@@ -6332,11 +6377,11 @@ my $test_result=$ERRORS{'OK'};
 
 $debug && print "------------ Critical Check ------------\n";
 my $critical_count=test_multiple_limits($critical_perf_specs_parsed,$test_value,$critical_spec_result_list,$critical_spec_list);
+$debug && print "------------ End Critical Check with count of $critical_count ------------\n";
 
 $debug && print "------------ Warning Check ------------\n";
 my $warn_count=test_multiple_limits($warn_perf_specs_parsed,$test_value,$warn_spec_result_list,$warn_spec_list);
-
-$debug && print "------------ End Check ------------\n";
+$debug && print "------------ End Warning Check with count of $warn_count ------------\n";
 
 # no longer needed as substitutions now occur at source ie wmi data collection
 # $use_pro_library && substitute_static_variables(1,$warn_spec_result_list,'','warning specification results');
@@ -6349,13 +6394,42 @@ if (defined($$test_value{'_KeepStateSamplePeriod'})) {
    $$test_value{'_StatusType'}=" (Sample Period $$test_value{'_KeepStateSamplePeriod'} sec)";
 }
 
-if ($critical_count>0) {
+my $critical_triggered=0;
+my $warning_triggered=0;
+
+if ($the_arguments{'_requireallcriticals'}) {
+   # in this case all critical tests must have been triggered to give an overall critical result
+   if ($critical_count>=$#$critical_spec_list+1) {
+      $debug && print "All critical tests triggered " . $critical_count . " of " . ($#$critical_spec_list+1) . "\n";
+      $critical_triggered=1;
+   }
+} else {
+   # use default method of any critical tests triggered, gives an overall critical result
+   if ($critical_count>0) {
+      $critical_triggered=1;
+   }
+}
+
+if ($the_arguments{'_requireallwarnings'}) {
+   # in this case all tests must have been triggered to give an overall warning result
+   if ($warn_count>=$#$warn_spec_list+1) {
+      $debug && print "All warning tests triggered " . $warn_count . " of " . ($#$warn_spec_list+1) . "\n";
+      $warning_triggered=1;
+   }
+} else {
+   # use default method of any tests triggered, gives an overall warning result
+   if ($warn_count>0) {
+      $warning_triggered=1;
+   }
+}
+
+if ($critical_triggered) {
    $test_result=$ERRORS{'CRITICAL'};
    $$test_value{'_TestResult'}=$ERRORS{'CRITICAL'};
    $$test_value{'_StatusType'}="CRITICAL$$test_value{'_StatusType'}";
    $$test_value{'_Triggers'}='[Triggered by ' . join(',',grep(/.+/,@{$critical_spec_result_list})) . ']';
    $$test_value{'_DisplayMsg'}="$$test_value{'_StatusType'} - $$test_value{'_Triggers'}";
-} elsif ($warn_count>0) {
+} elsif ($warning_triggered) {
    $test_result=$ERRORS{'WARNING'};
    $$test_value{'_TestResult'}=$ERRORS{'WARNING'};
    $$test_value{'_StatusType'}="WARNING$$test_value{'_StatusType'}";
@@ -6454,7 +6528,7 @@ sub get_files_from_dir {
 my ($dir,$pattern)=@_;
 my @list;
 
-opendir(DIR,"$dir");
+opendir(DIR,$dir);
 foreach my $file (readdir DIR) {
 	# only take files
    if ( -f "$dir/$file" && $file=~/$pattern/i) {

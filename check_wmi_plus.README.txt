@@ -1,4 +1,4 @@
-check_wmi_plus v1.65
+check_wmi_plus v1.66
 For installation details and more downloads see http://www.edcint.co.nz/checkwmiplus
 The --help output follows -
 
@@ -11,7 +11,7 @@ BRIEF
 
  Complete Usage:
 
- check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash] [--forceVariablesCriteriaSpec]
+ check_wmi_plus.pl -H HOSTNAME -u DOMAIN/USER -p PASSWORD -m MODE [-s SUBMODE] [-b BYTEFACTOR] [-w WARN] [-c CRIT] [-a ARG1 ] [-o ARG2] [-3 ARG3] [-4 ARG4] [-5 ARG5] [-A AUTHFILE] [-t TIMEOUT] [-y DELAY] [--namespace WMINAMESPACE] [--extrawmicarg EXTRAWMICARG] [--nodatamode] [--nodataexit NODATAEXIT] [--nodatastring NODATASTRING] [-d] [-z] [--inifile=INIFILE] [--inidir=INIDIR] [--inihelp] [--nokeepstate] [--keepexpiry EXPIRY] [--keepid KID] [--joinexpiry EXPIRY] [--helperexpiry EXPIRY] [-v OSVERSION] [--help] [--itexthelp] [--forcewmiccommand] [-icollectusage] [--ishowusage] [--logswitch] [--logkeep] [--logsuffix SUFFIX] [--logshow] [--variablesdisabled] [--forceiniopen] [--forcetruncateoutput LEN] [--Mapexit MAPSPEC] [--fieldshow] [--filterinirowsbystatus FILTERSTATUS] [--Convertslash] [--forceVariablesCriteriaSpec] [--iRequireAllCriticals] [--iRequireAllWarnings]
 
  Help as a Manpage:
 
@@ -62,9 +62,9 @@ COMMONLY USED OPTIONS
 
  -5 ARG5  argument number 5. Its meaning depends on the MODE/SUBMODE combination.
 
- -w WARN  specify warning criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a warning status (unless a critical status is also triggered). See below for how to specify warning criteria.
+ -w WARN  specify warning criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a warning status (unless a critical status is also triggered). See below for how to specify warning criteria. You can use --iRequireAllWarnings to require that all of the warning criteria must be met before the plugin will exit with a warning status.
 
- -c CRIT  specify critical criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a critical status. See below for how to specify warning criteria.
+ -c CRIT  specify critical criteria. You can specify none, one or more criteria. If any one of the criteria is triggered then the plugin will exit with a critical status. See below for how to specify warning criteria. You can use --iRequireAllCriticals to require that all of the critical criteria must be met before the plugin will exit with a critical status.
 
 LESS COMMONLY USED OPTIONS
  -b BYTEFACTOR  BYTEFACTOR is either 1000 or 1024 and is used for conversion units eg bytes to GB. Default is 1024.
@@ -141,6 +141,9 @@ LESS COMMONLY USED OPTIONS
 
  --filterinirowsbystatus FILTERSTATUS  Filter ini-based checks by their status. This is useful for checks that return many rows and where you may only want to show results that are not ok (for example). This only applies to the per row results and not to the overall state. FILTERSTATUS is a regular expression of Nagios return codes that you wish to display. Nagios return codes are 0-3, where 0=OK, 1=WARNING, 2=CRITICAL, 3=UNKNOWN. In order to display return codes 1 or 2 only a regular expression like 1|2 would be used. To display only OK states (return code 0) a regular expression of 0 would suffice.
 
+ --iRequireAllWarnings  use this option to require that all of the warning criteria must be met before the plugin will exit with a warning status
+
+ --iRequireAllCriticals  use this option to require that all of the critical criteria must be met before the plugin will exit with a critical status.
 KEEPING STATE
 This only applies to checks that need to perform 2 WMI queries to get a complete result eg checkcpu, checkio, checknetwork etc. Keeping State is used by default.
 
@@ -215,7 +218,7 @@ The convention used for field names in this plugin is as follows:
    6. alert is raised if metric is outside start and end range (inclusive of endpoints)
    7. if range starts with "@", then alert if inside this range (inclusive of endpoints)
    8. The start and end values can use multipliers from the following list:
-       or the time-based multipliers hr, yr, day, wk, min, mth, sec.
+       or the time-based multipliers sec, min, mth, wk, yr, day, hr.
       The time-based multipliers are normally used where the data is in seconds.
       eg 1G for 1 x 10^9 or 2.5k for 2500
       eg 1wk for 1 week, 3.5day for 3.5 days etc
@@ -355,14 +358,14 @@ checkeventlog
 
 checkfileage
    ARG1  full path to the file. Use '/' (forward slash) instead of '\\' (backslash).
-   ARG2  set this to one of the time multipliers (hr, yr, day, wk, min, mth, sec)
+   ARG2  set this to one of the time multipliers (sec, min, mth, wk, yr, day, hr)
       This becomes the display unit and the unit used in the performance data. Default is hr.
       -z can not be used for this mode.
    WARN/CRIT  can be used as described below.
       The only valid Warning/Critical Field is _FileAge, so you don't even need to specify it!
 
       The warning/critical values should be specified in seconds. However you can use the time multipliers
-      (hr, yr, day, wk, min, mth, sec) to make it easier to use
+      (sec, min, mth, wk, yr, day, hr) to make it easier to use
 
       eg instead of putting -w 3600 you can use -w 1hr
 
@@ -431,14 +434,14 @@ checknetwork
       specify exactly what you want. eg "LAN0" or "192.168.0.1" or "192.168.0" or "LAN0|LAN2" or "." or "08:00:27:85:CE:6D" or "08:00:27"
       To specify a network interface you can use either the Connection Name (as seen in Control Panel), IP Address (IPv4 or IPV6) or MAC Address. You can also use the name of the network adaptors as seen from WMI which is similar to what is seen in the output of the ipconfig/all command on Windows. However, it is not exactly the same and can be tricky since this uses a regular expression. Run without -a to show the interface
       names, IP Addresses, MAC Addresses. Typically you need to use '' around the adapter name when specifying.
-   ARG2  Set this to the string 'legacy' to query the older WMI class (Win32_PerfRawData_Tcpip_NetworkInterface) for obtaining network statistics. You may need to do this for Windows Server versions prior to Windows Server 2012.
+   ARG2  Set this to the string 'legacy' to query the older WMI class (Win32_PerfRawData_Tcpip_NetworkInterface) for obtaining network statistics. You may need to do this for Windows Server versions prior to Windows Server 2012. Set this to the string 'auto' to first try the newer query, then if that fails due to missing WMI classes, try the older query. Obviously, using this on known older target hosts will always run an additional query that will always fail which may slow down the plugin.
    DELAY  (optional) specifies the number of seconds over which the utilisation is calculated. The longer you can make this without timing out, the more accurate it will be. If specifying longer values. You may also need to use the -t parameter to set a longer script timeout. Only valid if also specifying --nokeepstate ie you are not using the state keeping feature. We recommend that you do keep state and hence do not use --nokeepstate.
    WARN/CRIT  can be used as described below.
       Valid Warning/Critical Fields are: CurrentBandwidth (Default), _PacketsSentPersec, _PacketsReceivedPersec, OutputQueueLength, PacketsReceivedErrors, _BytesSentPersec, _BytesReceivedPersec, _SendBytesUtilisation, _ReceiveBytesUtilisation
    BYTEFACTOR  defaults to 1000 for this mode. You can override this if you wish.
 
    Note:
-      This check does up to 3 WMI queries so it may be slow. You might need to use the -t option. Since 2 of the WMI queries are relatively static, their results are cached and you can set the refresh period for this data using --joinexpiry.
+      This check does up to 3 WMI queries so it may be slow. You might need to use the -t option.
 
    PRO Users can use --includedata and --excludedata for this mode.
 
@@ -582,7 +585,7 @@ checkuptime
    WARN/CRIT  can be used as described below.
       The only valid Warning/Critical Field is _UptimeSec, so you don't even need to specify it!
 
-      The warning/critical values should be specified in seconds. However you can use the time multipliers (hr, yr, day, wk, min, mth, sec) to make it easier to use.
+      The warning/critical values should be specified in seconds. However you can use the time multipliers (sec, min, mth, wk, yr, day, hr) to make it easier to use.
 
       eg instead of putting -w 1800 you can use -w 30min
 
