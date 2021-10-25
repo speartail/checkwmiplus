@@ -1,3 +1,7 @@
+* NOTICE
+
+This repository is no longer updated. Check [[http://www.edcint.co.nz/checkwmiplus/][upstream]].
+
 * check_wmi_plus
 
 Check WMI Plus is a client-less Nagios (and other monitoring systems that support the Nagios protocol) plugin for checking Windows systems.
